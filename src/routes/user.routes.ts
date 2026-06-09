@@ -1,19 +1,23 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
-import { getMe, getUsers, updateUser, getRoles } from '../controllers/user.controller';
 import { adminOnly } from '../middleware/adminOnly';
+import {
+    getMe,
+    getUsers,
+    updateUser,
+    getRoles,
+    createEmployee,   // new
+} from '../controllers/user.controller';
 
 const router = Router();
 router.use(authenticate);
 
-router.get('/me', getMe);          // any authenticated user
-router.get('/roles', getRoles);    // any authenticated user (for dropdowns)
+router.get('/me', getMe);
+router.get('/roles', getRoles);
 
-// Admin-only routes
-router.get('/', getUsers);          // admin middleware will be added inline, but we'll use a separate middleware
-router.put('/:id', updateUser);
-
+// Admin only
 router.get('/', adminOnly, getUsers);
 router.put('/:id', adminOnly, updateUser);
+router.post('/create-employee', adminOnly, createEmployee);
 
 export default router;

@@ -8,15 +8,16 @@ import {
     deleteCustomer,
 } from '../controllers/customer.controller';
 import { getVendorDetail } from '../controllers/vendor.controller';
+import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
 const router = Router();
 router.use(authenticate);
 
 router.get('/', getCustomers);
 router.get('/:id', getCustomer);
-router.post('/', createCustomer);
-router.put('/:id', updateCustomer);
-router.delete('/:id', deleteCustomer);
+router.post('/', requireWriteAccess, createCustomer);
+router.put('/:id', requireWriteAccess, updateCustomer);
+router.delete('/:id', requireWriteAccess, deleteCustomer);
 router.get('/:id/detail', getVendorDetail);
 
 

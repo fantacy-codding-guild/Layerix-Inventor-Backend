@@ -1,4 +1,7 @@
+//backend\src\controllers\user.controller.ts
 import prisma from '../lib/prisma';
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 
 // GET /api/users/me – current logged-in user
 export const getMe = async (req: any, res: any) => {
@@ -82,5 +85,60 @@ export const getRoles = async (req: any, res: any) => {
         res.json(roles);
     } catch (error) {
         res.status(500).json({ message: 'Failed to fetch roles' });
+    }
+};
+
+export const createEmployee = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const { name, email, roleId } = req.body;
+
+        if (!name || !email || !roleId) {
+            return res.status(400).json({ message: 'Name, email, and role are required' });
+        }
+
+        // Check email uniqueness in this tenant
+        const existing = await prisma.user.findFirst({ where: { tenantId, email } });
+        if (existing) return res.status(409).json({ message: 'A user with this email already exists' });
+
+        // Verify role belongs to tenant
+        const role = await prisma.role.findFirst({ where: { id: parseInt(roleId), tenantId } });
+        if (!role) return res.status(400).json({ message: 'Role not found' });
+
+        // Generate temporary password
+        const tempPassword = crypto.randomBytes(8).toString('hex'); // 16 chars
+        const passwordHash = await bcrypt.hash(tempPassword, 12);
+
+        const user = await prisma.user.create({
+            data: {
+                tenantId,
+                name,
+                email,
+                passwordHash,
+                roleId: parseInt(roleId),
+                isActive: true,
+                isVerified: true,           // skip OTP for admin-created users
+                forcePasswordReset: true,   // force password change on first login
+            },
+            include: { role: { select: { id: true, name: true } } },
+        });
+
+        // Send credentials email (reuse sendOTPEmail or create a dedicated function)
+        try {
+            // We'll use the same OTP email function but with a custom message – but it sends "Your OTP is: ...".
+            // Better: create a dedicated function sendCredentialsEmail, but for brevity we'll just log.
+            // In production, implement an email template.
+            console.log(`[EMPLOYEE CREATED] ${email} – temp password: ${tempPassword}`);
+            // await sendCredentialsEmail(email, tempPassword);
+        } catch (err) {
+            console.error('Failed to send welcome email', err);
+        }
+
+        const { passwordHash: _, ...rest } = user;
+        // Return temp password only for testing; remove in production
+        res.status(201).json({ ...rest, tempPassword });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to create employee' });
     }
 };

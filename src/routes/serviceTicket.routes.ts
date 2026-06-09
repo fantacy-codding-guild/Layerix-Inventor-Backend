@@ -7,14 +7,15 @@ import {
     updateServiceTicket,
     deleteServiceTicket,
 } from '../controllers/serviceTicket.controller';
+import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
 const router = Router();
 router.use(authenticate);
 
 router.get('/', getServiceTickets);
 router.get('/:id', getServiceTicket);
-router.post('/', createServiceTicket);
-router.put('/:id', updateServiceTicket);
-router.delete('/:id', deleteServiceTicket);
+router.post('/', requireWriteAccess, createServiceTicket);
+router.put('/:id', requireWriteAccess, updateServiceTicket);
+router.delete('/:id', requireWriteAccess, deleteServiceTicket);
 
 export default router;

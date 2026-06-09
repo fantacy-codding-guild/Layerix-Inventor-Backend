@@ -77,6 +77,8 @@ model User {
   documents           Document[]         @relation("DocumentUploader")
 
   @@unique([tenantId, email])
+
+    forcePasswordReset Boolean @default(false) 
 }
 
 model Role {

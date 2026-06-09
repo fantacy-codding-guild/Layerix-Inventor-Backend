@@ -6,6 +6,7 @@ import {
     purchaseSummary,
     profitabilityReport,
 } from '../controllers/report.controller';
+import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
 const router = Router();
 router.use(authenticate);

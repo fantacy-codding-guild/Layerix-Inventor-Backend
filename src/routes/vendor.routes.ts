@@ -12,21 +12,22 @@ import {
     removeVendorProduct,
     getVendorDetail,
 } from '../controllers/vendor.controller';
+import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
 const router = Router();
 router.use(authenticate);
 
 router.get('/', getVendors);
 router.get('/:id', getVendor);
-router.post('/', createVendor);
-router.put('/:id', updateVendor);
-router.delete('/:id', deleteVendor);
+router.post('/', requireWriteAccess, createVendor);
+router.put('/:id', requireWriteAccess, updateVendor);
+router.delete('/:id', requireWriteAccess, deleteVendor);
 
 // Vendor‑Product mappings
 router.get('/:id/products', getVendorProducts);
-router.post('/:id/products', addVendorProduct);
-router.put('/:id/products/:productId', updateVendorProduct);
-router.delete('/:id/products/:productId', removeVendorProduct);
+router.post('/:id/products', requireWriteAccess, addVendorProduct);
+router.put('/:id/products/:productId', requireWriteAccess, updateVendorProduct);
+router.delete('/:id/products/:productId', requireWriteAccess, removeVendorProduct);
 router.get('/:id/detail', getVendorDetail);
 
 export default router;
