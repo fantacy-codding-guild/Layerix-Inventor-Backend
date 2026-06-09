@@ -1,3 +1,4 @@
+//backend\src\routes\setup.routes.ts
 import { Router } from 'express';
 import prisma from '../lib/prisma';
 
