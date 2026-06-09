@@ -1,3 +1,4 @@
+//backend\src\controllers\auth.controller.ts
 import prisma from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
