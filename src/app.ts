@@ -16,6 +16,7 @@ import reportRoutes from './routes/report.routes';
 import userRoutes from './routes/user.routes';
 import activityLogRoutes from './routes/activityLog.routes';
 import setupRoutes from './routes/setup.routes';
+import dashboardRoutes from './routes/dashboard.routes';
 
 const app = express();
 app.use(cors());
@@ -41,6 +42,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/activity-logs', activityLogRoutes);
 app.use('/api/setup', setupRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 
 export default app;
