@@ -25,7 +25,6 @@ export const getProducts = async (req: any, res: any) => {
         const skip = (Number(page) - 1) * Number(limit);
 
         let where: any = { tenantId };
-
         if (search) {
             where.OR = [
                 { name: { contains: search, mode: 'insensitive' } },
@@ -50,7 +49,6 @@ export const getProducts = async (req: any, res: any) => {
             prisma.product.count({ where }),
         ]);
 
-        // Map to frontend-friendly structure
         const data = products.map(p => ({
             ...p,
             brands: p.brands.map(pb => pb.brand)
@@ -84,36 +82,6 @@ export const getProduct = async (req: any, res: any) => {
                     include: { brand: { select: { id: true, name: true } } }
                 },
                 stock: true,
-                vendorProducts: {
-                    include: {
-                        vendor: {
-                            select: { id: true, name: true, companyName: true, phone: true, email: true },
-                        },
-                    },
-                },
-                projectMaterialPlans: {
-                    include: {
-                        project: {
-                            select: { id: true, name: true, customerId: true, customer: { select: { id: true, name: true } } },
-                        },
-                    },
-                    orderBy: { project: { name: 'asc' } },
-                },
-                reservations: {
-                    where: { status: { not: 'CANCELLED' } },
-                    include: {
-                        project: {
-                            select: { id: true, name: true },
-                        },
-                    },
-                },
-                stockMovements: {
-                    take: 20,
-                    orderBy: { date: 'desc' },
-                    include: {
-                        user: { select: { id: true, name: true } },
-                    },
-                },
             },
         });
 
@@ -151,7 +119,6 @@ export const createProduct = async (req: any, res: any) => {
         const data = validation.data;
         const brandIds = data.brandIds || [];
 
-        // Validate all brands exist and belong to tenant
         if (brandIds.length) {
             const brands = await prisma.brand.findMany({
                 where: { id: { in: brandIds }, tenantId },
@@ -188,27 +155,6 @@ export const createProduct = async (req: any, res: any) => {
             },
         });
 
-        // Vendor linkage (if vendorId provided)
-        if (data.vendorId) {
-            const vendor = await prisma.vendor.findFirst({ where: { id: data.vendorId, tenantId } });
-            if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
-
-            const existingMapping = await prisma.vendorProduct.findUnique({
-                where: { vendorId_productId: { vendorId: data.vendorId, productId: product.id } },
-            });
-            if (!existingMapping) {
-                await prisma.vendorProduct.create({
-                    data: {
-                        vendorId: data.vendorId,
-                        productId: product.id,
-                        unitPrice: data.unitPrice ?? null,
-                        leadTimeDays: data.leadTimeDays ?? null,
-                        isPreferred: data.isPreferred ?? false,
-                    },
-                });
-            }
-        }
-
         // Log activity
         await prisma.activityLog.create({
             data: {
@@ -221,7 +167,6 @@ export const createProduct = async (req: any, res: any) => {
             },
         });
 
-        // Return with brands formatted
         res.status(201).json({
             ...product,
             brands: product.brands.map(pb => pb.brand),
@@ -254,7 +199,6 @@ export const updateProduct = async (req: any, res: any) => {
 
         const brandIds = data.brandIds || [];
 
-        // Validate all brands exist and belong to tenant
         if (brandIds.length) {
             const brands = await prisma.brand.findMany({
                 where: { id: { in: brandIds }, tenantId },
@@ -265,9 +209,7 @@ export const updateProduct = async (req: any, res: any) => {
             }
         }
 
-        // Update product basic info and replace brand links in a transaction
         await prisma.$transaction(async (tx) => {
-            // Update main product
             await tx.product.update({
                 where: { id: productId },
                 data: {
@@ -278,7 +220,6 @@ export const updateProduct = async (req: any, res: any) => {
                 },
             });
 
-            // Replace brand associations using the join table model `productBrand`
             await tx.productBrand.deleteMany({ where: { productId } });
             if (brandIds.length) {
                 await tx.productBrand.createMany({
@@ -287,38 +228,6 @@ export const updateProduct = async (req: any, res: any) => {
             }
         });
 
-        // Vendor linkage (if vendorId provided)
-        if (data.vendorId) {
-            const vendor = await prisma.vendor.findFirst({ where: { id: data.vendorId, tenantId } });
-            if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
-
-            const existingMapping = await prisma.vendorProduct.findUnique({
-                where: { vendorId_productId: { vendorId: data.vendorId, productId } },
-            });
-
-            if (existingMapping) {
-                await prisma.vendorProduct.update({
-                    where: { vendorId_productId: { vendorId: data.vendorId, productId } },
-                    data: {
-                        unitPrice: data.unitPrice ?? existingMapping.unitPrice,
-                        leadTimeDays: data.leadTimeDays ?? existingMapping.leadTimeDays,
-                        isPreferred: data.isPreferred ?? existingMapping.isPreferred,
-                    },
-                });
-            } else {
-                await prisma.vendorProduct.create({
-                    data: {
-                        vendorId: data.vendorId,
-                        productId,
-                        unitPrice: data.unitPrice ?? null,
-                        leadTimeDays: data.leadTimeDays ?? null,
-                        isPreferred: data.isPreferred ?? false,
-                    },
-                });
-            }
-        }
-
-        // Fetch updated product with brands
         const updated = await prisma.product.findFirst({
             where: { id: productId, tenantId },
             include: {
@@ -327,7 +236,6 @@ export const updateProduct = async (req: any, res: any) => {
             },
         });
 
-        // Log activity
         await prisma.activityLog.create({
             data: {
                 tenantId,
