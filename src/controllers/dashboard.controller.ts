@@ -4,12 +4,14 @@ export const inventorySummary = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
 
-        // Fetch all products with stock for this tenant
+        // Fetch all products with stock and brands for this tenant
         const products = await prisma.product.findMany({
             where: { tenantId },
             include: {
                 stock: true,
-                brand: { select: { name: true } },
+                brands: {
+                    include: { brand: { select: { name: true } } }
+                },
             },
         });
 
@@ -20,10 +22,12 @@ export const inventorySummary = async (req: any, res: any) => {
             const avgCost = p.stock?.averageCost ? Number(p.stock.averageCost) : 0;
             const value = qty * avgCost;
             totalValue += value;
+            // Combine all brand names into a comma‑separated string
+            const brandNames = p.brands.map(pb => pb.brand.name).join(', ') || '—';
             return {
                 id: p.id,
                 name: p.name,
-                brand: p.brand?.name || '—',
+                brand: brandNames,
                 quantityOnHand: qty,
                 averageCost: avgCost,
                 totalValue: value,

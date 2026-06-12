@@ -4,20 +4,23 @@ import { projectSchema, milestoneSchema, materialPlanSchema } from '../validator
 
 // ---------------- Project CRUD ----------------
 
+
 export const getProjects = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
-        const { search, customerId, status, page = 1, limit = 20, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+        const { search, customerId, stateId, status, page = 1, limit = 20, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
         const skip = (Number(page) - 1) * Number(limit);
 
         const where: any = { tenantId };
         if (search) {
             where.OR = [
                 { name: { contains: search, mode: 'insensitive' } },
+                { code: { contains: search, mode: 'insensitive' } },
                 { location: { contains: search, mode: 'insensitive' } },
             ];
         }
         if (customerId) where.customerId = Number(customerId);
+        if (stateId) where.stateId = Number(stateId);
         if (status) where.status = status.toUpperCase();
 
         const [projects, total] = await Promise.all([
@@ -25,8 +28,12 @@ export const getProjects = async (req: any, res: any) => {
                 where,
                 include: {
                     customer: { select: { id: true, name: true, company: true } },
+                    state: { select: { id: true, name: true, code: true } },
                     projectManager: { select: { id: true, name: true } },
-                    _count: { select: { milestones: true, materialPlans: true } },
+                    materialPlans: {
+                        select: { plannedQuantity: true, consumedQuantity: true },
+                    },
+                    _count: { select: { milestones: true } },
                 },
                 orderBy: { [sortBy as string]: sortOrder },
                 skip,
@@ -35,8 +42,34 @@ export const getProjects = async (req: any, res: any) => {
             prisma.project.count({ where }),
         ]);
 
+        // Enrich projects with inventory summary
+        const data = projects.map((p) => {
+            const totalAllocated = p.materialPlans.reduce((sum, mp) => sum + mp.plannedQuantity, 0);
+            const totalConsumed = p.materialPlans.reduce((sum, mp) => sum + mp.consumedQuantity, 0);
+            return {
+                id: p.id,
+                name: p.name,
+                code: p.code,
+                customer: p.customer,
+                state: p.state,
+                district: p.district,
+                city: p.city,
+                projectType: p.projectType,
+                projectValue: p.projectValue,
+                status: p.status,
+                completionPercent: p.completionPercent,
+                milestonesCount: p._count.milestones,
+                totalAllocated,
+                totalConsumed,
+                totalRemaining: totalAllocated - totalConsumed,
+                projectManager: p.projectManager,
+                startDate: p.startDate,
+                endDate: p.endDate,
+            };
+        });
+
         res.json({
-            data: projects,
+            data,
             pagination: {
                 page: Number(page),
                 limit: Number(limit),
@@ -58,6 +91,7 @@ export const getProject = async (req: any, res: any) => {
             where: { id, tenantId },
             include: {
                 customer: true,
+                state: true,
                 projectManager: { select: { id: true, name: true } },
                 milestones: { orderBy: { orderIndex: 'asc' } },
                 materialPlans: {
@@ -69,7 +103,16 @@ export const getProject = async (req: any, res: any) => {
             },
         });
         if (!project) return res.status(404).json({ message: 'Project not found' });
-        res.json(project);
+
+        const totalAllocated = project.materialPlans.reduce((sum, mp) => sum + mp.plannedQuantity, 0);
+        const totalConsumed = project.materialPlans.reduce((sum, mp) => sum + mp.consumedQuantity, 0);
+
+        res.json({
+            ...project,
+            totalAllocated,
+            totalConsumed,
+            totalRemaining: totalAllocated - totalConsumed,
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to fetch project' });
@@ -85,32 +128,45 @@ export const createProject = async (req: any, res: any) => {
         }
 
         const data = validation.data;
-        // Validate customer belongs to tenant
+        // Validate customer and state belong to tenant
         const customer = await prisma.customer.findFirst({ where: { id: data.customerId, tenantId } });
         if (!customer) return res.status(400).json({ message: 'Customer not found or not accessible' });
 
-        // Validate project manager if provided
+        if (data.stateId) {
+            const state = await prisma.state.findFirst({ where: { id: data.stateId, tenantId } });
+            if (!state) return res.status(400).json({ message: 'State not found' });
+        }
+
         if (data.projectManagerId) {
             const user = await prisma.user.findFirst({ where: { id: data.projectManagerId, tenantId } });
-            if (!user) return res.status(400).json({ message: 'Project manager not found or not accessible' });
+            if (!user) return res.status(400).json({ message: 'Project manager not found' });
         }
 
         const project = await prisma.project.create({
             data: {
                 tenantId,
                 name: data.name,
+                code: data.code,
                 customerId: data.customerId,
-                location: data.location,
+                stateId: data.stateId || null,
+                district: data.district,
+                city: data.city,
+                siteAddress: data.siteAddress,
+                projectType: data.projectType,
                 projectValue: data.projectValue,
                 startDate: data.startDate ? new Date(data.startDate) : undefined,
                 endDate: data.endDate ? new Date(data.endDate) : undefined,
-                projectManagerId: data.projectManagerId,
+                completionPercent: data.completionPercent ?? 0,
                 status: data.status || 'NOT_STARTED',
+                projectManagerId: data.projectManagerId,
             },
-            include: { customer: true },
+            include: {
+                customer: true,
+                state: true,
+                projectManager: { select: { id: true, name: true } },
+            },
         });
 
-        // Log activity
         await prisma.activityLog.create({
             data: {
                 tenantId,
@@ -142,10 +198,13 @@ export const updateProject = async (req: any, res: any) => {
         }
         const data = validation.data;
 
-        // Validate references if changed
         if (data.customerId) {
             const customer = await prisma.customer.findFirst({ where: { id: data.customerId, tenantId } });
             if (!customer) return res.status(400).json({ message: 'Customer not found' });
+        }
+        if (data.stateId) {
+            const state = await prisma.state.findFirst({ where: { id: data.stateId, tenantId } });
+            if (!state) return res.status(400).json({ message: 'State not found' });
         }
         if (data.projectManagerId) {
             const user = await prisma.user.findFirst({ where: { id: data.projectManagerId, tenantId } });
@@ -159,10 +218,13 @@ export const updateProject = async (req: any, res: any) => {
                 startDate: data.startDate ? new Date(data.startDate) : undefined,
                 endDate: data.endDate ? new Date(data.endDate) : undefined,
             },
-            include: { customer: true, projectManager: { select: { id: true, name: true } } },
+            include: {
+                customer: true,
+                state: true,
+                projectManager: { select: { id: true, name: true } },
+            },
         });
 
-        // Log activity
         await prisma.activityLog.create({
             data: {
                 tenantId,
@@ -188,7 +250,6 @@ export const deleteProject = async (req: any, res: any) => {
         const project = await prisma.project.findFirst({ where: { id, tenantId } });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        // Optionally check if project has stock movements or other dependencies
         await prisma.project.delete({ where: { id } });
 
         await prisma.activityLog.create({
@@ -208,6 +269,7 @@ export const deleteProject = async (req: any, res: any) => {
         res.status(500).json({ message: 'Failed to delete project' });
     }
 };
+
 
 // ---------------- Milestones ----------------
 
@@ -479,6 +541,134 @@ export const deleteMaterialPlan = async (req: any, res: any) => {
 };
 
 // Helper: recalculate overall project progress as average of milestone progresses
+export const getProjectStock = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const projectId = parseInt(req.params.id);
+        const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
+        if (!project) return res.status(404).json({ message: 'Project not found' });
+
+        const stockItems = await prisma.projectStock.findMany({
+            where: { projectId },
+            include: {
+                product: {
+                    include: {
+                        brands: {
+                            include: { brand: { select: { id: true, name: true } } }
+                        },
+                        serviceCategory: true,
+                    }
+                }
+            },
+        });
+
+        const result = stockItems.map(item => ({
+            productId: item.productId,
+            productName: item.product.name,
+            productCode: item.product.productCode,
+            // Join all brand names
+            brand: item.product.brands.map(pb => pb.brand.name).join(', ') || '-',
+            category: item.product.serviceCategory?.name || '-',
+            unit: item.product.unit,
+            quantityOnSite: item.quantityOnSite,
+            reservedQuantity: item.reservedQuantity,
+            available: item.quantityOnSite - item.reservedQuantity,
+        }));
+
+        res.json(result);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to fetch project stock' });
+    }
+};
+
+// Get consumption history (stock movements FROM this project, e.g., material used)
+export const getProjectConsumption = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const projectId = parseInt(req.params.id);
+        const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
+        if (!project) return res.status(404).json({ message: 'Project not found' });
+
+        // Fetch ProjectStockMovement records where type = 'STOCK_OUT' and projectId = this project
+        // (meaning material taken out of project – consumption)
+        const movements = await prisma.projectStockMovement.findMany({
+            where: { projectId, type: 'STOCK_OUT' },
+            include: {
+                product: { select: { id: true, name: true, productCode: true, unit: true } },
+                user: { select: { id: true, name: true } },
+            },
+            orderBy: { date: 'desc' },
+        });
+        res.json(movements);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to fetch consumption history' });
+    }
+};
+
+// Get incoming deliveries (stock movements TO this project from office or vendor)
+export const getProjectIncoming = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const projectId = parseInt(req.params.id);
+        const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
+        if (!project) return res.status(404).json({ message: 'Project not found' });
+
+        // Two sources: StockMovement (toProjectId) and ProjectStockMovement (type='STOCK_IN')
+        const [officeTransfers, directDeliveries] = await Promise.all([
+            prisma.stockMovement.findMany({
+                where: { toProjectId: projectId, tenantId },
+                include: {
+                    product: { select: { id: true, name: true, productCode: true, unit: true } },
+                    fromVendor: { select: { id: true, name: true } },
+                    user: { select: { id: true, name: true } },
+                },
+                orderBy: { date: 'desc' },
+            }),
+            prisma.projectStockMovement.findMany({
+                where: { projectId, type: 'STOCK_IN' },
+                include: {
+                    product: { select: { id: true, name: true, productCode: true, unit: true } },
+                    user: { select: { id: true, name: true } },
+                },
+                orderBy: { date: 'desc' },
+            }),
+        ]);
+
+        // Combine and sort by date
+        const all = [
+            ...officeTransfers.map(m => ({
+                id: m.id,
+                date: m.date,
+                productName: m.product.name,
+                productCode: m.product.productCode,
+                quantity: m.quantity,
+                unit: m.product.unit,
+                source: m.fromVendor ? `Vendor: ${m.fromVendor.name}` : 'Office Transfer',
+                notes: m.notes,
+                status: 'Delivered', // all recorded movements are completed
+            })),
+            ...directDeliveries.map(m => ({
+                id: m.id,
+                date: m.date,
+                productName: m.product.name,
+                productCode: m.product.productCode,
+                quantity: m.quantity,
+                unit: m.product.unit,
+                source: m.notes || 'Direct Site Delivery',
+                notes: m.notes,
+                status: 'Delivered',
+            })),
+        ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        res.json(all);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to fetch incoming deliveries' });
+    }
+};
+
 async function recalcProjectProgress(projectId: number) {
     const milestones = await prisma.projectMilestone.findMany({
         where: { projectId },
@@ -488,6 +678,6 @@ async function recalcProjectProgress(projectId: number) {
     const avg = count === 0 ? 0 : milestones.reduce((sum, m) => sum + m.progress, 0) / count;
     await prisma.project.update({
         where: { id: projectId },
-        data: { overallProgress: Math.round(avg * 100) / 100 }, // round to 2 decimals
+        data: { overallProgress: Math.round(avg * 100) / 100 },
     });
 }

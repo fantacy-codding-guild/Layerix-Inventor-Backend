@@ -30,7 +30,7 @@ export const getProducts = async (req: any, res: any) => {
             where.OR = [
                 { name: { contains: search, mode: 'insensitive' } },
                 { productCode: { contains: search, mode: 'insensitive' } },
-                { sku: { contains: search, mode: 'insensitive' } },   // kept for search, but SKU not displayed
+                { sku: { contains: search, mode: 'insensitive' } },
             ];
         }
 
@@ -38,7 +38,9 @@ export const getProducts = async (req: any, res: any) => {
             prisma.product.findMany({
                 where,
                 include: {
-                    brand: { select: { id: true, name: true } },
+                    brands: {
+                        include: { brand: { select: { id: true, name: true } } }
+                    },
                     stock: true,
                 },
                 orderBy: { [sortBy as string]: sortOrder },
@@ -48,8 +50,14 @@ export const getProducts = async (req: any, res: any) => {
             prisma.product.count({ where }),
         ]);
 
+        // Map to frontend-friendly structure
+        const data = products.map(p => ({
+            ...p,
+            brands: p.brands.map(pb => pb.brand)
+        }));
+
         res.json({
-            data: products,
+            data,
             pagination: {
                 page: Number(page),
                 limit: Number(limit),
@@ -72,7 +80,9 @@ export const getProduct = async (req: any, res: any) => {
                 tenantId: req.user.tenantId,
             },
             include: {
-                brand: true,
+                brands: {
+                    include: { brand: { select: { id: true, name: true } } }
+                },
                 stock: true,
                 vendorProducts: {
                     include: {
@@ -111,6 +121,7 @@ export const getProduct = async (req: any, res: any) => {
 
         const result = {
             ...product,
+            brands: product.brands.map(pb => pb.brand),
             availableStock: (product.stock?.quantityOnHand ?? 0) - (product.stock?.reservedQuantity ?? 0),
             isLowStock: ((product.stock?.quantityOnHand ?? 0) - (product.stock?.reservedQuantity ?? 0)) < (product.minStockLevel ?? 0),
         };
@@ -138,11 +149,17 @@ export const createProduct = async (req: any, res: any) => {
         }
 
         const data = validation.data;
+        const brandIds = data.brandIds || [];
 
-        // Validate brand if provided
-        if (data.brandId) {
-            const brand = await prisma.brand.findFirst({ where: { id: data.brandId, tenantId } });
-            if (!brand) return res.status(400).json({ message: 'Brand not found or not accessible' });
+        // Validate all brands exist and belong to tenant
+        if (brandIds.length) {
+            const brands = await prisma.brand.findMany({
+                where: { id: { in: brandIds }, tenantId },
+                select: { id: true },
+            });
+            if (brands.length !== brandIds.length) {
+                return res.status(400).json({ message: 'One or more brands not found' });
+            }
         }
 
         const productCode = await generateProductCode(tenantId);
@@ -152,7 +169,6 @@ export const createProduct = async (req: any, res: any) => {
                 tenantId,
                 productCode,
                 name: data.name,
-                brandId: data.brandId || null,
                 modelNumber: data.modelNumber || null,
                 unit: data.unit || 'Pcs',
                 description: data.description || null,
@@ -162,9 +178,12 @@ export const createProduct = async (req: any, res: any) => {
                         reservedQuantity: 0,
                     },
                 },
+                brands: {
+                    create: brandIds.map(brandId => ({ brandId })),
+                },
             },
             include: {
-                brand: true,
+                brands: { include: { brand: true } },
                 stock: true,
             },
         });
@@ -202,7 +221,11 @@ export const createProduct = async (req: any, res: any) => {
             },
         });
 
-        res.status(201).json(product);
+        // Return with brands formatted
+        res.status(201).json({
+            ...product,
+            brands: product.brands.map(pb => pb.brand),
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to create product' });
@@ -229,25 +252,39 @@ export const updateProduct = async (req: any, res: any) => {
         const existing = await prisma.product.findFirst({ where: { id: productId, tenantId } });
         if (!existing) return res.status(404).json({ message: 'Product not found' });
 
-        // Validate brand if provided
-        if (data.brandId) {
-            const brand = await prisma.brand.findFirst({ where: { id: data.brandId, tenantId } });
-            if (!brand) return res.status(400).json({ message: 'Brand not found or not accessible' });
+        const brandIds = data.brandIds || [];
+
+        // Validate all brands exist and belong to tenant
+        if (brandIds.length) {
+            const brands = await prisma.brand.findMany({
+                where: { id: { in: brandIds }, tenantId },
+                select: { id: true },
+            });
+            if (brands.length !== brandIds.length) {
+                return res.status(400).json({ message: 'One or more brands not found' });
+            }
         }
 
-        const updated = await prisma.product.update({
-            where: { id: productId },
-            data: {
-                name: data.name,
-                brandId: data.brandId,
-                modelNumber: data.modelNumber,
-                unit: data.unit,
-                description: data.description,
-            },
-            include: {
-                brand: true,
-                stock: true,
-            },
+        // Update product basic info and replace brand links in a transaction
+        await prisma.$transaction(async (tx) => {
+            // Update main product
+            await tx.product.update({
+                where: { id: productId },
+                data: {
+                    name: data.name,
+                    modelNumber: data.modelNumber,
+                    unit: data.unit,
+                    description: data.description,
+                },
+            });
+
+            // Replace brand associations using the join table model `productBrand`
+            await tx.productBrand.deleteMany({ where: { productId } });
+            if (brandIds.length) {
+                await tx.productBrand.createMany({
+                    data: brandIds.map(brandId => ({ productId, brandId })),
+                });
+            }
         });
 
         // Vendor linkage (if vendorId provided)
@@ -281,6 +318,15 @@ export const updateProduct = async (req: any, res: any) => {
             }
         }
 
+        // Fetch updated product with brands
+        const updated = await prisma.product.findFirst({
+            where: { id: productId, tenantId },
+            include: {
+                brands: { include: { brand: true } },
+                stock: true,
+            },
+        });
+
         // Log activity
         await prisma.activityLog.create({
             data: {
@@ -293,7 +339,10 @@ export const updateProduct = async (req: any, res: any) => {
             },
         });
 
-        res.json(updated);
+        res.json({
+            ...updated,
+            brands: updated!.brands.map(pb => pb.brand),
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to update product' });

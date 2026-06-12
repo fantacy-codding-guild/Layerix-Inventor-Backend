@@ -24,15 +24,19 @@ export const getStockOverview = async (req: any, res: any) => {
         }
 
         if (categoryId) where.serviceCategoryId = Number(categoryId);
-        if (brandId) where.brandId = Number(brandId);
+        if (brandId) {
+            where.brands = { some: { brandId: Number(brandId) } };
+        }
 
         const [products, total] = await Promise.all([
             prisma.product.findMany({
                 where,
                 include: {
-                    brand: { select: { id: true, name: true } },
                     serviceCategory: { select: { id: true, name: true } },
                     stock: true,
+                    brands: {
+                        include: { brand: { select: { id: true, name: true } } }
+                    }
                 },
                 orderBy: { name: 'asc' },
                 skip,
@@ -45,12 +49,13 @@ export const getStockOverview = async (req: any, res: any) => {
             const onHand = p.stock?.quantityOnHand ?? 0;
             const reserved = p.stock?.reservedQuantity ?? 0;
             const available = onHand - reserved;
+            const brandNames = p.brands.map(pb => pb.brand.name).join(', ');
             return {
                 id: p.id,
                 productCode: p.productCode,
                 name: p.name,
                 sku: p.sku,
-                brand: p.brand,
+                brand: brandNames || null,
                 category: p.serviceCategory,
                 unit: p.unit,
                 minStockLevel: p.minStockLevel,
@@ -81,13 +86,19 @@ export const getStockOverview = async (req: any, res: any) => {
     }
 };
 
-// ---------------- Low Stock Alerts ----------------
+// ---------------- Low Stock Alerts (FIXED) ----------------
 export const getLowStockAlerts = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
         const products = await prisma.product.findMany({
             where: { tenantId },
-            include: { stock: true, brand: true, serviceCategory: true },
+            include: {
+                stock: true,
+                serviceCategory: true,
+                brands: {
+                    include: { brand: { select: { id: true, name: true } } }
+                }
+            },
         });
 
         const alerts = products
@@ -95,11 +106,12 @@ export const getLowStockAlerts = async (req: any, res: any) => {
                 const onHand = p.stock?.quantityOnHand ?? 0;
                 const reserved = p.stock?.reservedQuantity ?? 0;
                 const available = onHand - reserved;
+                const brandNames = p.brands.map(pb => pb.brand.name).join(', ');
                 return {
                     id: p.id,
                     productCode: p.productCode,
                     name: p.name,
-                    brand: p.brand?.name,
+                    brand: brandNames || null,
                     category: p.serviceCategory?.name,
                     minStockLevel: p.minStockLevel,
                     currentStock: onHand,
@@ -117,7 +129,7 @@ export const getLowStockAlerts = async (req: any, res: any) => {
     }
 };
 
-// ---------------- Stock In ----------------
+// ---------------- Stock In (unchanged) ----------------
 export const stockIn = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -128,14 +140,12 @@ export const stockIn = async (req: any, res: any) => {
 
         const { productId, quantity, unitPrice, fromVendorId, projectId, referenceType, referenceId, notes } = validation.data;
 
-        // Validate product belongs to tenant
         const product = await prisma.product.findFirst({
             where: { id: productId, tenantId },
             include: { stock: true },
         });
         if (!product) return res.status(404).json({ message: 'Product not found' });
 
-        // Validate optional vendor / project
         if (fromVendorId) {
             const vendor = await prisma.vendor.findFirst({ where: { id: fromVendorId, tenantId } });
             if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
@@ -146,7 +156,6 @@ export const stockIn = async (req: any, res: any) => {
         }
 
         await prisma.$transaction(async (tx) => {
-            // Upsert stock
             const currentStock = await tx.stock.upsert({
                 where: { productId },
                 update: {},
@@ -191,7 +200,6 @@ export const stockIn = async (req: any, res: any) => {
             });
         });
 
-        // Log activity
         await prisma.activityLog.create({
             data: {
                 tenantId,
@@ -210,7 +218,7 @@ export const stockIn = async (req: any, res: any) => {
     }
 };
 
-// ---------------- Stock Out ----------------
+// ---------------- Stock Out (unchanged) ----------------
 export const stockOut = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -221,7 +229,6 @@ export const stockOut = async (req: any, res: any) => {
 
         const { productId, quantity, unitPrice, toProjectId, toCustomerId, referenceType, referenceId, notes } = validation.data;
 
-        // At least one destination should be specified (unless it's a manual adjustment)
         if (!toProjectId && !toCustomerId && referenceType !== 'MANUAL_ADJUSTMENT') {
             return res.status(400).json({ message: 'Specify either toProjectId or toCustomerId' });
         }
@@ -240,7 +247,6 @@ export const stockOut = async (req: any, res: any) => {
             return res.status(400).json({ message: 'Insufficient available stock' });
         }
 
-        // Validate destinations
         if (toProjectId) {
             const project = await prisma.project.findFirst({ where: { id: toProjectId, tenantId } });
             if (!project) return res.status(400).json({ message: 'Project not found' });
@@ -251,13 +257,11 @@ export const stockOut = async (req: any, res: any) => {
         }
 
         await prisma.$transaction(async (tx) => {
-            // Decrease on-hand
             await tx.stock.update({
                 where: { productId },
                 data: { quantityOnHand: { decrement: quantity } },
             });
 
-            // Handle reservations (if issuing to a project)
             if (toProjectId) {
                 const reservation = await tx.stockReservation.findFirst({
                     where: {
@@ -280,7 +284,6 @@ export const stockOut = async (req: any, res: any) => {
                         },
                     });
 
-                    // Reduce reservedQuantity on stock
                     await tx.stock.update({
                         where: { productId },
                         data: { reservedQuantity: { decrement: fulfilled } },
@@ -306,7 +309,6 @@ export const stockOut = async (req: any, res: any) => {
             });
         });
 
-        // Log activity
         await prisma.activityLog.create({
             data: {
                 tenantId,
@@ -325,7 +327,7 @@ export const stockOut = async (req: any, res: any) => {
     }
 };
 
-// ---------------- Adjustment ----------------
+// ---------------- Adjustment (unchanged) ----------------
 export const adjustment = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -368,7 +370,6 @@ export const adjustment = async (req: any, res: any) => {
             });
         });
 
-        // Log activity
         await prisma.activityLog.create({
             data: {
                 tenantId,
@@ -387,7 +388,7 @@ export const adjustment = async (req: any, res: any) => {
     }
 };
 
-// ---------------- Reservations ----------------
+// ---------------- Reservations (unchanged) ----------------
 export const getReservations = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -505,7 +506,7 @@ export const releaseReservation = async (req: any, res: any) => {
     }
 };
 
-// ---------------- Movements History ----------------
+// ---------------- Movements History (unchanged) ----------------
 export const getMovements = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;

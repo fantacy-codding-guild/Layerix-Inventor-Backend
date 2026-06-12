@@ -4,6 +4,9 @@ import {
     getProjects, getProject, createProject, updateProject, deleteProject,
     getMilestones, createMilestone, updateMilestone, deleteMilestone,
     getMaterialPlans, addMaterialPlan, updateMaterialPlan, deleteMaterialPlan,
+    getProjectStock,
+    getProjectIncoming,
+    getProjectConsumption,
 } from '../controllers/project.controller';
 import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
@@ -28,5 +31,8 @@ router.get('/:id/material-plans', getMaterialPlans);
 router.post('/:id/material-plans', requireWriteAccess, addMaterialPlan);
 router.put('/:id/material-plans/:planId', requireWriteAccess, updateMaterialPlan);
 router.delete('/:id/material-plans/:planId', requireWriteAccess, deleteMaterialPlan);
+router.get('/:id/stock', getProjectStock);
+router.get('/:id/consumption', getProjectConsumption);
+router.get('/:id/incoming', getProjectIncoming);
 
 export default router;

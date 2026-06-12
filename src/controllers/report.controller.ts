@@ -1,6 +1,6 @@
 import prisma from '../lib/prisma';
 
-// Inventory Valuation Report
+// Inventory Valuation Report (FIXED: uses many-to-many brands)
 export const inventoryValuation = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -12,7 +12,9 @@ export const inventoryValuation = async (req: any, res: any) => {
                 where: { tenantId },
                 include: {
                     stock: true,
-                    brand: { select: { name: true } },
+                    brands: {
+                        include: { brand: { select: { name: true } } }
+                    },
                     serviceCategory: { select: { name: true } },
                 },
                 skip,
@@ -25,11 +27,12 @@ export const inventoryValuation = async (req: any, res: any) => {
         const data = products.map((p) => {
             const qty = p.stock?.quantityOnHand ?? 0;
             const avgCost = p.stock?.averageCost ? Number(p.stock.averageCost) : 0;
+            const brandNames = p.brands.map(pb => pb.brand.name).join(', ');
             return {
                 id: p.id,
                 productCode: p.productCode,
                 name: p.name,
-                brand: p.brand?.name,
+                brand: brandNames || null,
                 category: p.serviceCategory?.name,
                 unit: p.unit,
                 quantityOnHand: qty,
@@ -53,7 +56,7 @@ export const inventoryValuation = async (req: any, res: any) => {
     }
 };
 
-// Project Material Consumption Report
+// Project Material Consumption Report (unchanged – no brand used)
 export const projectMaterialReport = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -99,7 +102,7 @@ export const projectMaterialReport = async (req: any, res: any) => {
     }
 };
 
-// Purchase Summary Report
+// Purchase Summary Report (unchanged)
 export const purchaseSummary = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -147,7 +150,7 @@ export const purchaseSummary = async (req: any, res: any) => {
     }
 };
 
-// Profitability Overview (simplified – project value minus material cost from stock‑in linked to project)
+// Profitability Overview (unchanged)
 export const profitabilityReport = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;

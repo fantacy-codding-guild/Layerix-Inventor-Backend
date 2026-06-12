@@ -7,7 +7,6 @@ import {
     updateCustomer,
     deleteCustomer,
 } from '../controllers/customer.controller';
-import { getVendorDetail } from '../controllers/vendor.controller';
 import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
 const router = Router();
@@ -18,7 +17,6 @@ router.get('/:id', getCustomer);
 router.post('/', requireWriteAccess, createCustomer);
 router.put('/:id', requireWriteAccess, updateCustomer);
 router.delete('/:id', requireWriteAccess, deleteCustomer);
-router.get('/:id/detail', getVendorDetail);
 
 
 export default router;

@@ -6,11 +6,11 @@ import {
     createVendor,
     updateVendor,
     deleteVendor,
-    getVendorProducts,
-    addVendorProduct,
-    updateVendorProduct,
-    removeVendorProduct,
-    getVendorDetail,
+    deleteAllVendorContacts,
+    deleteVendorContact,
+    updateVendorContact,
+    addVendorContact,
+    getVendorContacts,
 } from '../controllers/vendor.controller';
 import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
@@ -23,11 +23,10 @@ router.post('/', requireWriteAccess, createVendor);
 router.put('/:id', requireWriteAccess, updateVendor);
 router.delete('/:id', requireWriteAccess, deleteVendor);
 
-// Vendor‑Product mappings
-router.get('/:id/products', getVendorProducts);
-router.post('/:id/products', requireWriteAccess, addVendorProduct);
-router.put('/:id/products/:productId', requireWriteAccess, updateVendorProduct);
-router.delete('/:id/products/:productId', requireWriteAccess, removeVendorProduct);
-router.get('/:id/detail', getVendorDetail);
-
+// Contacts
+router.get('/:id/contacts', getVendorContacts);
+router.post('/:id/contacts', requireWriteAccess, addVendorContact);
+router.put('/:id/contacts/:contactId', requireWriteAccess, updateVendorContact);
+router.delete('/:id/contacts/:contactId', requireWriteAccess, deleteVendorContact);
+router.delete('/:id/contacts/all', requireWriteAccess, deleteAllVendorContacts);
 export default router;

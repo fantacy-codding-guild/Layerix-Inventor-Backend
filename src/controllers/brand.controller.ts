@@ -79,10 +79,12 @@ export const deleteBrand = async (req: any, res: any) => {
         const brand = await prisma.brand.findFirst({ where: { id, tenantId } });
         if (!brand) return res.status(404).json({ message: 'Brand not found' });
 
-        // Check if any products reference this brand
-        const productCount = await prisma.product.count({ where: { brandId: id } });
+        // Check if any products are linked through the join table
+        const productCount = await prisma.productBrand.count({
+            where: { brandId: id },
+        });
         if (productCount > 0) {
-            return res.status(409).json({ message: 'Cannot delete brand with existing products.' });
+            return res.status(409).json({ message: 'Cannot delete brand with existing product associations.' });
         }
 
         await prisma.brand.delete({ where: { id } });

@@ -17,6 +17,8 @@ import userRoutes from './routes/user.routes';
 import activityLogRoutes from './routes/activityLog.routes';
 import setupRoutes from './routes/setup.routes';
 import dashboardRoutes from './routes/dashboard.routes';
+import stateRoutes from './routes/states.routes';
+import transferRoutes from './routes/transfer.routes';
 
 const app = express();
 app.use(cors());
@@ -43,6 +45,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/activity-logs', activityLogRoutes);
 app.use('/api/setup', setupRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/states', stateRoutes);
+app.use('/api/transfers', transferRoutes);
 
 
 export default app;
