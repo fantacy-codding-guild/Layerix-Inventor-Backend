@@ -1,3 +1,4 @@
+//backend\src\controllers\brand.controller.ts
 import prisma from '../lib/prisma';
 import { brandSchema } from '../validators/brand.validator';
 
