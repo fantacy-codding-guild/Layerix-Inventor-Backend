@@ -142,3 +142,63 @@ export const createEmployee = async (req: any, res: any) => {
         res.status(500).json({ message: 'Failed to create employee' });
     }
 };
+
+// Add at the end of the file:
+
+// DELETE /api/users/:id – admin only – delete user
+export const deleteUser = async (req: any, res: any) => {
+    try {
+        if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required' });
+
+        const targetId = parseInt(req.params.id);
+        if (targetId === req.user.userId) {
+            return res.status(400).json({ message: 'You cannot delete your own account' });
+        }
+
+        const user = await prisma.user.findFirst({
+            where: { id: targetId, tenantId: req.user.tenantId },
+        });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // Check if user has any critical records (optional: soft delete instead)
+        // For now we allow hard delete – cascade will delete refreshTokens, activityLogs
+        await prisma.user.delete({ where: { id: targetId } });
+
+        res.json({ message: 'User deleted successfully' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to delete user' });
+    }
+};
+
+// POST /api/users/:id/reset-password – admin only – reset user password
+export const resetUserPassword = async (req: any, res: any) => {
+    try {
+        if (req.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required' });
+
+        const targetId = parseInt(req.params.id);
+        const user = await prisma.user.findFirst({
+            where: { id: targetId, tenantId: req.user.tenantId },
+        });
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        const tempPassword = crypto.randomBytes(8).toString('hex');
+        const passwordHash = await bcrypt.hash(tempPassword, 12);
+
+        await prisma.user.update({
+            where: { id: targetId },
+            data: {
+                passwordHash,
+                forcePasswordReset: true,
+            },
+        });
+
+        // In production, send email with the temp password
+        console.log(`[PASSWORD RESET] ${user.email} – new temp password: ${tempPassword}`);
+
+        res.json({ message: 'Password reset successful', tempPassword });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to reset password' });
+    }
+};
