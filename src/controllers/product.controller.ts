@@ -1,3 +1,4 @@
+//backend\src\controllers\product.controller.ts
 import prisma from '../lib/prisma';
 import { createProductSchema, updateProductSchema } from '../validators/product.validator';
 
@@ -70,7 +71,12 @@ export const getProduct = async (req: any, res: any) => {
     try {
         const product = await prisma.product.findFirst({
             where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
-            include: { stock: true },
+            include: {
+                stock: true,
+                brands: {
+                    include: { brand: { select: { id: true, name: true } } }
+                }
+            },
         });
         if (!product) return res.status(404).json({ message: 'Product not found' });
         res.json(product);

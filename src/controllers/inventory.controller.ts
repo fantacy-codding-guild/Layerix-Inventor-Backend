@@ -130,6 +130,7 @@ export const getLowStockAlerts = async (req: any, res: any) => {
 };
 
 // ---------------- Stock In (unchanged) ----------------
+// ---------------- Stock In (with brand linking) ----------------
 export const stockIn = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -146,6 +147,31 @@ export const stockIn = async (req: any, res: any) => {
         });
         if (!product) return res.status(404).json({ message: 'Product not found' });
 
+        // ---------- BRAND LINKING ----------
+        if (notes && notes.includes('Brand:')) {
+            const brandMatch = notes.match(/Brand:\s*(.+)/);
+            if (brandMatch) {
+                const brandName = brandMatch[1].trim();
+                if (brandName) {
+                    const brand = await prisma.brand.findFirst({
+                        where: { tenantId, name: { equals: brandName, mode: 'insensitive' } },
+                    });
+                    if (brand) {
+                        const existing = await prisma.productBrand.findUnique({
+                            where: { productId_brandId: { productId, brandId: brand.id } },
+                        });
+                        if (!existing) {
+                            await prisma.productBrand.create({
+                                data: { productId, brandId: brand.id },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // ---------- END BRAND LINKING ----------
+
+        // Validate vendor/project...
         if (fromVendorId) {
             const vendor = await prisma.vendor.findFirst({ where: { id: fromVendorId, tenantId } });
             if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
@@ -155,6 +181,7 @@ export const stockIn = async (req: any, res: any) => {
             if (!project) return res.status(400).json({ message: 'Project not found' });
         }
 
+        // Continue with stock transaction...
         await prisma.$transaction(async (tx) => {
             const currentStock = await tx.stock.upsert({
                 where: { productId },
