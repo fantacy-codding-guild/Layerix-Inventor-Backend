@@ -6,8 +6,11 @@ import {
     getUsers,
     updateUser,
     getRoles,
-    createEmployee,   // new
+    createEmployee,
+    resetUserPassword,
+    deleteUser,   // new
 } from '../controllers/user.controller';
+import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
 const router = Router();
 router.use(authenticate);
@@ -19,5 +22,6 @@ router.get('/roles', getRoles);
 router.get('/', adminOnly, getUsers);
 router.put('/:id', adminOnly, updateUser);
 router.post('/create-employee', adminOnly, createEmployee);
-
+router.delete('/:id', requireWriteAccess, deleteUser);
+router.post('/:id/reset-password', requireWriteAccess, resetUserPassword);
 export default router;
