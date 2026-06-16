@@ -574,3 +574,169 @@ export const getMovements = async (req: any, res: any) => {
         res.status(500).json({ message: 'Failed to fetch stock movements' });
     }
 };
+
+
+// backend/src/controllers/inventory.controller.ts
+
+// ... (existing imports and functions remain unchanged) ...
+
+// ─── Update Movement (Edit) ──────────────────────────────────
+export const updateMovement = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const movementId = parseInt(req.params.id);
+
+        // Validate request body
+        const { quantity, unitPrice, notes } = req.body;
+        if (quantity === undefined && unitPrice === undefined && notes === undefined) {
+            return res.status(400).json({ message: 'No fields to update' });
+        }
+
+        // Fetch existing movement with product and stock
+        const existingMovement = await prisma.stockMovement.findFirst({
+            where: { id: movementId, tenantId },
+            include: { product: { include: { stock: true } } },
+        });
+        if (!existingMovement) {
+            return res.status(404).json({ message: 'Movement not found' });
+        }
+
+        // If quantity is changing, we need to adjust stock
+        let quantityDelta = 0;
+        if (quantity !== undefined && quantity !== existingMovement.quantity) {
+            quantityDelta = quantity - existingMovement.quantity;
+        }
+
+        // Start transaction
+        await prisma.$transaction(async (tx) => {
+            // Adjust stock based on movement type and delta
+            if (quantityDelta !== 0) {
+                const stock = await tx.stock.findUnique({
+                    where: { productId: existingMovement.productId },
+                });
+                if (!stock) {
+                    throw new Error('Stock record not found');
+                }
+
+                let newOnHand = stock.quantityOnHand;
+                if (existingMovement.type === 'STOCK_IN') {
+                    newOnHand += quantityDelta;
+                } else if (existingMovement.type === 'STOCK_OUT') {
+                    newOnHand -= quantityDelta;
+                } else if (existingMovement.type === 'ADJUSTMENT') {
+                    newOnHand += quantityDelta;
+                }
+
+                if (newOnHand < 0) {
+                    throw new Error('Insufficient stock after update');
+                }
+
+                await tx.stock.update({
+                    where: { productId: existingMovement.productId },
+                    data: { quantityOnHand: newOnHand },
+                });
+            }
+
+            // Update unitPrice – for STOCK_IN we might recalc avg cost, but we'll leave as is
+            // For simplicity, we just update the movement record
+            await tx.stockMovement.update({
+                where: { id: movementId },
+                data: {
+                    quantity: quantity ?? existingMovement.quantity,
+                    unitPrice: unitPrice !== undefined ? unitPrice : existingMovement.unitPrice,
+                    notes: notes !== undefined ? notes : existingMovement.notes,
+                },
+            });
+        });
+
+        // Log activity
+        await prisma.activityLog.create({
+            data: {
+                tenantId,
+                userId: req.user.userId,
+                action: 'UPDATE',
+                entityType: 'StockMovement',
+                entityId: movementId,
+                details: { changes: req.body },
+            },
+        });
+
+        res.json({ message: 'Movement updated successfully' });
+    } catch (error: any) {
+        console.error(error);
+        res.status(500).json({ message: error.message || 'Failed to update movement' });
+    }
+};
+
+// ─── Delete Movement (with reversal) ─────────────────────────
+export const deleteMovement = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const movementId = parseInt(req.params.id);
+
+        // Fetch the movement with product and stock
+        const movement = await prisma.stockMovement.findFirst({
+            where: { id: movementId, tenantId },
+            include: { product: { include: { stock: true } } },
+        });
+        if (!movement) {
+            return res.status(404).json({ message: 'Movement not found' });
+        }
+
+        // Start transaction to reverse effect and delete
+        await prisma.$transaction(async (tx) => {
+            const stock = await tx.stock.findUnique({
+                where: { productId: movement.productId },
+            });
+            if (!stock) {
+                throw new Error('Stock record not found');
+            }
+
+            // Reverse the effect based on type
+            let newOnHand = stock.quantityOnHand;
+            if (movement.type === 'STOCK_IN') {
+                newOnHand -= movement.quantity;
+            } else if (movement.type === 'STOCK_OUT') {
+                newOnHand += movement.quantity;
+            } else if (movement.type === 'ADJUSTMENT') {
+                newOnHand -= movement.quantity;
+            }
+
+            if (newOnHand < 0) {
+                throw new Error('Cannot delete: stock would become negative');
+            }
+
+            await tx.stock.update({
+                where: { productId: movement.productId },
+                data: { quantityOnHand: newOnHand },
+            });
+
+            // If STOCK_OUT and it fulfilled reservations, we may need to restore them
+            // For simplicity, we only delete the movement and leave reservations as is.
+            // However, if the movement has a reference to a reservation, we could revert it.
+            // We'll skip this for now and assume manual correction later.
+
+            // Delete the movement
+            await tx.stockMovement.delete({
+                where: { id: movementId },
+            });
+        });
+
+        // Log activity
+        await prisma.activityLog.create({
+            data: {
+                tenantId,
+                userId: req.user.userId,
+                action: 'DELETE',
+                entityType: 'StockMovement',
+                entityId: movementId,
+                details: { deleted: movement },
+            },
+        });
+
+        res.json({ message: 'Movement deleted successfully' });
+    } catch (error: any) {
+        console.error(error);
+        res.status(500).json({ message: error.message || 'Failed to delete movement' });
+    }
+};
