@@ -581,18 +581,20 @@ export const getMovements = async (req: any, res: any) => {
 // ... (existing imports and functions remain unchanged) ...
 
 // ─── Update Movement (Edit) ──────────────────────────────────
+// backend/src/controllers/inventory.controller.ts
+
 export const updateMovement = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
         const movementId = parseInt(req.params.id);
 
         // Validate request body
-        const { quantity, unitPrice, notes } = req.body;
-        if (quantity === undefined && unitPrice === undefined && notes === undefined) {
+        const { quantity, unitPrice, notes, fromVendorId, toProjectId, toCustomerId } = req.body;
+        if (Object.keys(req.body).length === 0) {
             return res.status(400).json({ message: 'No fields to update' });
         }
 
-        // Fetch existing movement with product and stock
+        // Fetch existing movement
         const existingMovement = await prisma.stockMovement.findFirst({
             where: { id: movementId, tenantId },
             include: { product: { include: { stock: true } } },
@@ -601,22 +603,42 @@ export const updateMovement = async (req: any, res: any) => {
             return res.status(404).json({ message: 'Movement not found' });
         }
 
-        // If quantity is changing, we need to adjust stock
+        // Validate foreign keys if provided
+        if (fromVendorId !== undefined && fromVendorId !== null) {
+            const vendor = await prisma.vendor.findFirst({ where: { id: fromVendorId, tenantId } });
+            if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
+        }
+        if (toProjectId !== undefined && toProjectId !== null) {
+            const project = await prisma.project.findFirst({ where: { id: toProjectId, tenantId } });
+            if (!project) return res.status(400).json({ message: 'Project not found' });
+        }
+        if (toCustomerId !== undefined && toCustomerId !== null) {
+            const customer = await prisma.customer.findFirst({ where: { id: toCustomerId, tenantId } });
+            if (!customer) return res.status(400).json({ message: 'Customer not found' });
+        }
+
+        // Prepare update data
+        const updateData: any = {};
+        if (quantity !== undefined) updateData.quantity = quantity;
+        if (unitPrice !== undefined) updateData.unitPrice = unitPrice;
+        if (notes !== undefined) updateData.notes = notes;
+        if (fromVendorId !== undefined) updateData.fromVendorId = fromVendorId || null;
+        if (toProjectId !== undefined) updateData.toProjectId = toProjectId || null;
+        if (toCustomerId !== undefined) updateData.toCustomerId = toCustomerId || null;
+
+        // If quantity is changing, adjust stock
         let quantityDelta = 0;
         if (quantity !== undefined && quantity !== existingMovement.quantity) {
             quantityDelta = quantity - existingMovement.quantity;
         }
 
-        // Start transaction
         await prisma.$transaction(async (tx) => {
-            // Adjust stock based on movement type and delta
+            // Adjust stock if quantity changed
             if (quantityDelta !== 0) {
                 const stock = await tx.stock.findUnique({
                     where: { productId: existingMovement.productId },
                 });
-                if (!stock) {
-                    throw new Error('Stock record not found');
-                }
+                if (!stock) throw new Error('Stock record not found');
 
                 let newOnHand = stock.quantityOnHand;
                 if (existingMovement.type === 'STOCK_IN') {
@@ -626,10 +648,7 @@ export const updateMovement = async (req: any, res: any) => {
                 } else if (existingMovement.type === 'ADJUSTMENT') {
                     newOnHand += quantityDelta;
                 }
-
-                if (newOnHand < 0) {
-                    throw new Error('Insufficient stock after update');
-                }
+                if (newOnHand < 0) throw new Error('Insufficient stock after update');
 
                 await tx.stock.update({
                     where: { productId: existingMovement.productId },
@@ -637,15 +656,10 @@ export const updateMovement = async (req: any, res: any) => {
                 });
             }
 
-            // Update unitPrice – for STOCK_IN we might recalc avg cost, but we'll leave as is
-            // For simplicity, we just update the movement record
+            // Update movement record
             await tx.stockMovement.update({
                 where: { id: movementId },
-                data: {
-                    quantity: quantity ?? existingMovement.quantity,
-                    unitPrice: unitPrice !== undefined ? unitPrice : existingMovement.unitPrice,
-                    notes: notes !== undefined ? notes : existingMovement.notes,
-                },
+                data: updateData,
             });
         });
 
@@ -667,7 +681,6 @@ export const updateMovement = async (req: any, res: any) => {
         res.status(500).json({ message: error.message || 'Failed to update movement' });
     }
 };
-
 // ─── Delete Movement (with reversal) ─────────────────────────
 export const deleteMovement = async (req: any, res: any) => {
     try {
