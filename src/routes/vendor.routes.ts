@@ -1,3 +1,4 @@
+//backend\src\routes\vendor.routes.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import {
@@ -29,4 +30,5 @@ router.post('/:id/contacts', requireWriteAccess, addVendorContact);
 router.put('/:id/contacts/:contactId', requireWriteAccess, updateVendorContact);
 router.delete('/:id/contacts/:contactId', requireWriteAccess, deleteVendorContact);
 router.delete('/:id/contacts/all', requireWriteAccess, deleteAllVendorContacts);
+
 export default router;
