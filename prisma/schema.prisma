@@ -33,6 +33,7 @@ model Tenant {
   serviceCategories    ServiceCategory[]
   products             Product[]
   vendors              Vendor[]
+  projectMaterialMovements  ProjectMaterialMovement[]
   customers            Customer[]
   projects             Project[]
   purchaseRequests     PurchaseRequest[]
@@ -55,6 +56,7 @@ model User {
   id            Int      @id @default(autoincrement())
   tenantId      Int
   tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  projectMaterialMovements  ProjectMaterialMovement[]  @relation("UserMaterialMovement")
   name          String
   email         String
   passwordHash  String
@@ -88,7 +90,7 @@ model User {
 }
 
 // --------------------------------------------------------
-// (Role, RefreshToken, ActivityLog, Setting – unchanged)
+// Role, RefreshToken, ActivityLog, Setting
 // --------------------------------------------------------
 
 model Role {
@@ -139,7 +141,7 @@ model Setting {
 }
 
 // --------------------------------------------------------
-// MASTERS (Brand, ServiceCategory, Product, Stock – unchanged)
+// MASTERS (Brand, ServiceCategory, Product, Stock)
 // --------------------------------------------------------
 
 model Brand {
@@ -151,27 +153,12 @@ model Brand {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Many‑to‑many relation via join table
-  products  ProductBrand[]   // ← only this one, remove the other `products` field
+  products  ProductBrand[]
+  projectMaterialMovements  ProjectMaterialMovement[]
 
   @@unique([tenantId, name])
 }
 
-model VendorContact {
-  id        Int      @id @default(autoincrement())
-  vendorId  Int
-  vendor    Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  name      String
-  phone     String?
-  altPhone  String?
-  email     String?
-  designation String?
-  isPrimary Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([vendorId])
-}
 model ProductBrand {
   productId Int
   brandId   Int
@@ -200,7 +187,6 @@ model Product {
   tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   productCode       String
   name              String
-  sku               String?
 
   modelNumber       String?
   serviceCategoryId Int?
@@ -223,12 +209,11 @@ model Product {
   projectMovements   ProjectStockMovement[]
   transferItems      StockTransferItem[]
 
-  // Many‑to‑many relation via join table
-  brands             ProductBrand[]   // ← keep this
+  brands             ProductBrand[]
+  projectMaterialMovements  ProjectMaterialMovement[]
 
   @@unique([tenantId, productCode])
   @@index([tenantId, name])
-  @@index([tenantId, sku])
 }
 
 model Stock {
@@ -241,7 +226,7 @@ model Stock {
 }
 
 // --------------------------------------------------------
-// VENDORS & CUSTOMERS (unchanged)
+// VENDORS & CUSTOMERS
 // --------------------------------------------------------
 
 model Vendor {
@@ -249,10 +234,9 @@ model Vendor {
   tenantId    Int
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name        String
-  companyName String?   // keep for compatibility, can be same as name
+  companyName String?
   gstNumber   String?
-  phone       String?   // can keep but we'll use contacts instead
-  // ... other fields (keep them for existing data, but will not be used in new UI)
+  phone       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -261,21 +245,38 @@ model Vendor {
   goodsReceived   GoodsReceived[]
   vendorInvoices  VendorInvoice[]
   stockMovements  StockMovement[]   @relation("FromVendor")
-
-  contacts  VendorContact[]   // <-- ADD THIS LINE
+  contacts  VendorContact[]
+  projectMaterialMovements  ProjectMaterialMovement[]   @relation("VendorMaterialMovement")
 
   @@index([tenantId, name])
 }
 
+model VendorContact {
+  id          Int      @id @default(autoincrement())
+  vendorId    Int
+  vendor      Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  name        String
+  phone       String?
+  altPhone    String?
+  email       String?
+  designation String?
+  isPrimary   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([vendorId])
+}
+
 model VendorProduct {
-  vendorId      Int
-  productId     Int
-  vendor        Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  unitPrice     Decimal? @db.Decimal(10,2)
-  leadTimeDays  Int?
-  isPreferred   Boolean  @default(false)
-  createdAt     DateTime @default(now())
+  vendorId     Int
+  productId    Int
+  vendor       Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  unitPrice    Decimal? @db.Decimal(10,2)
+  leadTimeDays Int?
+  isPreferred  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
   @@id([vendorId, productId])
 }
 
@@ -302,31 +303,32 @@ model Customer {
   siteVisits     SiteVisit[]
   breakFixes     BreakFix[]
   stockMovements StockMovement[]   @relation("ToCustomer")
+
   @@index([tenantId, name])
 }
 
 // --------------------------------------------------------
-// STATE (new model)
+// STATE
 // --------------------------------------------------------
 
 model State {
-  id            Int      @id @default(autoincrement())
-  tenantId      Int
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name          String
-  code          String
-  region        String?
+  id             Int      @id @default(autoincrement())
+  tenantId       Int
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name           String
+  code           String
+  region         String?
   projectManager String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  projects      Project[]
+  projects       Project[]
   @@unique([tenantId, name])
   @@unique([tenantId, code])
 }
 
 // --------------------------------------------------------
-// PROJECTS (enhanced)
+// PROJECTS
 // --------------------------------------------------------
 
 enum ProjectStatus {
@@ -343,8 +345,8 @@ model Project {
   tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name             String
   code             String?       @unique
-  customerId       Int
-  customer         Customer      @relation(fields: [customerId], references: [id])
+  customerId       Int?
+  customer         Customer?     @relation(fields: [customerId], references: [id])
   stateId          Int?
   state            State?        @relation(fields: [stateId], references: [id])
   district         String?
@@ -374,10 +376,11 @@ model Project {
   projectMovements  ProjectStockMovement[]
   outgoingTransfers StockTransfer[]   @relation("FromProject")
   incomingTransfers StockTransfer[]   @relation("ToProject")
+  projectMaterialMovements  ProjectMaterialMovement[]
 }
 
 // --------------------------------------------------------
-// PROJECT MATERIAL PLANS (unchanged)
+// PROJECT MATERIAL PLANS
 // --------------------------------------------------------
 
 model ProjectMilestone {
@@ -448,7 +451,7 @@ model ProjectStockMovement {
 }
 
 // --------------------------------------------------------
-// STOCK TRANSFERS (new model)
+// STOCK TRANSFERS
 // --------------------------------------------------------
 
 enum TransferStatus {
@@ -493,7 +496,7 @@ model StockTransferItem {
 }
 
 // --------------------------------------------------------
-// INVENTORY & STOCK MOVEMENTS (unchanged)
+// INVENTORY & STOCK MOVEMENTS
 // --------------------------------------------------------
 
 enum MovementType {
@@ -548,7 +551,7 @@ model StockReservation {
 }
 
 // --------------------------------------------------------
-// PROCUREMENT (unchanged)
+// PROCUREMENT
 // --------------------------------------------------------
 
 model PurchaseRequest {
@@ -679,7 +682,7 @@ model InvoicePurchaseOrder {
 }
 
 // --------------------------------------------------------
-// OPERATIONS (unchanged)
+// OPERATIONS
 // --------------------------------------------------------
 
 model AMC {
@@ -768,7 +771,7 @@ model SiteVisit {
 }
 
 // --------------------------------------------------------
-// DOCUMENTS (unchanged)
+// DOCUMENTS
 // --------------------------------------------------------
 
 enum EntityType {
@@ -798,4 +801,38 @@ model Document {
   createdAt   DateTime   @default(now())
 
   @@index([tenantId, entityType, entityId])
+}
+
+// --------------------------------------------------------
+// PROJECT MATERIAL MOVEMENTS (new)
+// --------------------------------------------------------
+
+enum ProjectMaterialType {
+  ORDER
+  CONSUME
+  TRANSFER_OUT   // Return to office
+}
+
+model ProjectMaterialMovement {
+  id           Int                   @id @default(autoincrement())
+  tenantId     Int
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  projectId    Int
+  project      Project               @relation(fields: [projectId], references: [id])
+  productId    Int
+  product      Product               @relation(fields: [productId], references: [id])
+  type         ProjectMaterialType
+  quantity     Int
+  unitPrice    Decimal?              @db.Decimal(10,2)
+  fromVendorId Int?
+  fromVendor   Vendor?               @relation("VendorMaterialMovement", fields: [fromVendorId], references: [id])
+  brandId      Int?
+  brand        Brand?                @relation(fields: [brandId], references: [id])
+  notes        String?
+  date         DateTime              @default(now())
+  createdBy    Int?
+  user         User?                 @relation("UserMaterialMovement", fields: [createdBy], references: [id])
+  createdAt    DateTime              @default(now())
+
+  @@index([tenantId, projectId, date])
 }

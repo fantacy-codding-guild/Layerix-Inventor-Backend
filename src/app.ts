@@ -18,6 +18,7 @@ import activityLogRoutes from './routes/activityLog.routes';
 import setupRoutes from './routes/setup.routes';
 import dashboardRoutes from './routes/dashboard.routes';
 import stateRoutes from './routes/states.routes';
+import projectMaterialRoutes from './routes/projectMaterial.routes';
 import transferRoutes from './routes/transfer.routes';
 
 const app = express();
@@ -47,6 +48,8 @@ app.use('/api/setup', setupRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/states', stateRoutes);
 app.use('/api/transfers', transferRoutes);
+
+app.use('/projects', projectMaterialRoutes);
 
 
 export default app;

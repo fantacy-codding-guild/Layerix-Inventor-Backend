@@ -11,14 +11,10 @@ import {
 } from '../controllers/product.controller';
 
 const router = Router();
+router.use(authenticate);
 
-router.use(authenticate);   // all routes below require auth
-
-// Public read routes
 router.get('/', getProducts);
 router.get('/:id', getProduct);
-
-// Write routes – only admin/manager can access
 router.post('/', requireWriteAccess, createProduct);
 router.put('/:id', requireWriteAccess, updateProduct);
 router.delete('/:id', requireWriteAccess, deleteProduct);

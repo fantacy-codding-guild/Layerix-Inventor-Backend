@@ -1,6 +1,13 @@
 //backend\src\controllers\product.controller.ts
 import prisma from '../lib/prisma';
-import { createProductSchema, updateProductSchema } from '../validators/product.validator';
+import { z } from 'zod';
+
+const productSchema = z.object({
+    name: z.string().min(1, 'Name is required').max(200),
+    description: z.string().max(1000).optional(),
+});
+
+const updateProductSchema = productSchema.partial();
 
 const generateProductCode = async (tenantId: number) => {
     const today = new Date();
@@ -37,9 +44,7 @@ export const getProducts = async (req: any, res: any) => {
                 where,
                 include: {
                     stock: true,
-                    brands: {
-                        include: { brand: { select: { id: true, name: true } } }
-                    }
+                    brands: { include: { brand: { select: { id: true, name: true } } } }
                 },
                 orderBy: { [sortBy as string]: sortOrder },
                 skip,
@@ -53,33 +58,55 @@ export const getProducts = async (req: any, res: any) => {
             brands: p.brands.map(pb => pb.brand)
         }));
 
-        res.json({
-            data,
-            pagination: {
-                page: Number(page),
-                limit: Number(limit),
-                total,
-                totalPages: Math.ceil(total / Number(limit)),
-            },
-        });
+        res.json({ data, pagination: { page: Number(page), limit: Number(limit), total, totalPages: Math.ceil(total / Number(limit)) } });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to fetch products' });
     }
 };
+
 export const getProduct = async (req: any, res: any) => {
     try {
         const product = await prisma.product.findFirst({
             where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
             include: {
                 stock: true,
-                brands: {
-                    include: { brand: { select: { id: true, name: true } } }
-                }
+                brands: { include: { brand: { select: { id: true, name: true } } } },
+                vendorProducts: {
+                    include: {
+                        vendor: {
+                            select: { id: true, name: true, companyName: true, phone: true, email: true },
+                        },
+                    },
+                },
+                projectMaterialPlans: {
+                    include: {
+                        project: {
+                            select: { id: true, name: true, customerId: true, customer: { select: { id: true, name: true } } },
+                        },
+                    },
+                    orderBy: { project: { name: 'asc' } },
+                },
+                reservations: {
+                    where: { status: { not: 'CANCELLED' } },
+                    include: { project: { select: { id: true, name: true } } },
+                },
+                stockMovements: {
+                    take: 20,
+                    orderBy: { date: 'desc' },
+                    include: { user: { select: { id: true, name: true } } },
+                },
             },
         });
         if (!product) return res.status(404).json({ message: 'Product not found' });
-        res.json(product);
+
+        const result = {
+            ...product,
+            brands: product.brands.map(pb => pb.brand),
+            availableStock: (product.stock?.quantityOnHand ?? 0) - (product.stock?.reservedQuantity ?? 0),
+            isLowStock: ((product.stock?.quantityOnHand ?? 0) - (product.stock?.reservedQuantity ?? 0)) < (product.minStockLevel ?? 0),
+        };
+        res.json(result);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to fetch product' });
@@ -89,7 +116,7 @@ export const getProduct = async (req: any, res: any) => {
 export const createProduct = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
-        const validation = createProductSchema.safeParse(req.body);
+        const validation = productSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
                 message: 'Validation error',
@@ -106,8 +133,6 @@ export const createProduct = async (req: any, res: any) => {
                 tenantId,
                 productCode,
                 name: data.name,
-                modelNumber: data.modelNumber || null,
-                unit: data.unit || 'Pcs',
                 description: data.description || null,
                 stock: {
                     create: { quantityOnHand: 0, reservedQuantity: 0 },
@@ -115,7 +140,6 @@ export const createProduct = async (req: any, res: any) => {
             },
             include: { stock: true },
         });
-
         await prisma.activityLog.create({
             data: {
                 tenantId,
@@ -126,7 +150,6 @@ export const createProduct = async (req: any, res: any) => {
                 details: { name: product.name },
             },
         });
-
         res.status(201).json(product);
     } catch (error) {
         console.error(error);
@@ -156,8 +179,6 @@ export const updateProduct = async (req: any, res: any) => {
             where: { id: productId },
             data: {
                 name: data.name,
-                modelNumber: data.modelNumber,
-                unit: data.unit,
                 description: data.description,
             },
             include: { stock: true },

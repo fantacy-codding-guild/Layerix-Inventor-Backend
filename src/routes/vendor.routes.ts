@@ -1,19 +1,19 @@
 //backend\src\routes\vendor.routes.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
+import { requireWriteAccess } from '../middleware/requireWriteAccess';
 import {
     getVendors,
     getVendor,
     createVendor,
     updateVendor,
     deleteVendor,
-    deleteAllVendorContacts,
-    deleteVendorContact,
-    updateVendorContact,
-    addVendorContact,
     getVendorContacts,
+    addVendorContact,
+    updateVendorContact,
+    deleteVendorContact,
+    deleteAllVendorContacts,
 } from '../controllers/vendor.controller';
-import { requireWriteAccess } from '../middleware/requireWriteAccess';
 
 const router = Router();
 router.use(authenticate);

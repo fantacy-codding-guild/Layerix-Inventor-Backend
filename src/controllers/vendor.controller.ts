@@ -192,16 +192,12 @@ export const updateVendorContact = async (req: any, res: any) => {
 
 export const deleteVendorContact = async (req: any, res: any) => {
     try {
-        const contactId = parseInt(req.params.contactId);   // ← from URL
+        const contactId = parseInt(req.params.contactId);
         const vendorId = parseInt(req.params.id);
         const tenantId = req.user.tenantId;
-
         const vendor = await prisma.vendor.findFirst({ where: { id: vendorId, tenantId } });
         if (!vendor) return res.status(404).json({ message: 'Vendor not found' });
-
-        await prisma.vendorContact.delete({
-            where: { id: contactId }   // ← use the correct ID
-        });
+        await prisma.vendorContact.delete({ where: { id: contactId } });
         res.json({ message: 'Contact deleted' });
     } catch (error) {
         console.error(error);
