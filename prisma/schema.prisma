@@ -214,6 +214,8 @@ model Product {
 
   @@unique([tenantId, productCode])
   @@index([tenantId, name])
+    productUnits ProductUnit[]   // <-- add this
+
 }
 
 model Stock {
@@ -835,4 +837,13 @@ model ProjectMaterialMovement {
   createdAt    DateTime              @default(now())
 
   @@index([tenantId, projectId, date])
+}
+
+model ProductUnit {
+  productId        Int
+  unit             String
+  conversionFactor Float   // how many base units in one unit of this type
+  product          Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([productId, unit])
 }

@@ -1,13 +1,9 @@
-//backend\src\controllers\product.controller.ts
+// backend/src/controllers/product.controller.ts
 import prisma from '../lib/prisma';
-import { z } from 'zod';
-
-const productSchema = z.object({
-    name: z.string().min(1, 'Name is required').max(200),
-    description: z.string().max(1000).optional(),
-});
-
-const updateProductSchema = productSchema.partial();
+import {
+    createProductSchema,
+    updateProductSchema,
+} from '../validators/product.validator';   // ✅ imported validators with unit
 
 const generateProductCode = async (tenantId: number) => {
     const today = new Date();
@@ -24,6 +20,7 @@ const generateProductCode = async (tenantId: number) => {
     return `PRD-${datePart}-${String(countToday + 1).padStart(3, '0')}`;
 };
 
+// ────────── READ ──────────
 export const getProducts = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -44,7 +41,7 @@ export const getProducts = async (req: any, res: any) => {
                 where,
                 include: {
                     stock: true,
-                    brands: { include: { brand: { select: { id: true, name: true } } } }
+                    brands: { include: { brand: { select: { id: true, name: true } } } },
                 },
                 orderBy: { [sortBy as string]: sortOrder },
                 skip,
@@ -55,10 +52,18 @@ export const getProducts = async (req: any, res: any) => {
 
         const data = products.map(p => ({
             ...p,
-            brands: p.brands.map(pb => pb.brand)
+            brands: p.brands.map(pb => pb.brand),
         }));
 
-        res.json({ data, pagination: { page: Number(page), limit: Number(limit), total, totalPages: Math.ceil(total / Number(limit)) } });
+        res.json({
+            data,
+            pagination: {
+                page: Number(page),
+                limit: Number(limit),
+                total,
+                totalPages: Math.ceil(total / Number(limit)),
+            },
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to fetch products' });
@@ -69,54 +74,24 @@ export const getProduct = async (req: any, res: any) => {
     try {
         const product = await prisma.product.findFirst({
             where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
-            include: {
-                stock: true,
-                brands: { include: { brand: { select: { id: true, name: true } } } },
-                vendorProducts: {
-                    include: {
-                        vendor: {
-                            select: { id: true, name: true, companyName: true, phone: true, email: true },
-                        },
-                    },
-                },
-                projectMaterialPlans: {
-                    include: {
-                        project: {
-                            select: { id: true, name: true, customerId: true, customer: { select: { id: true, name: true } } },
-                        },
-                    },
-                    orderBy: { project: { name: 'asc' } },
-                },
-                reservations: {
-                    where: { status: { not: 'CANCELLED' } },
-                    include: { project: { select: { id: true, name: true } } },
-                },
-                stockMovements: {
-                    take: 20,
-                    orderBy: { date: 'desc' },
-                    include: { user: { select: { id: true, name: true } } },
-                },
-            },
+            // no includes – only the basic fields (id, name, unit, description, etc.)
         });
+
         if (!product) return res.status(404).json({ message: 'Product not found' });
 
-        const result = {
-            ...product,
-            brands: product.brands.map(pb => pb.brand),
-            availableStock: (product.stock?.quantityOnHand ?? 0) - (product.stock?.reservedQuantity ?? 0),
-            isLowStock: ((product.stock?.quantityOnHand ?? 0) - (product.stock?.reservedQuantity ?? 0)) < (product.minStockLevel ?? 0),
-        };
-        res.json(result);
+        res.json(product);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to fetch product' });
     }
 };
 
+// ────────── CREATE ──────────
 export const createProduct = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
-        const validation = productSchema.safeParse(req.body);
+        // ✅ Use external validator – it accepts unit, modelNumber, etc.
+        const validation = createProductSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
                 message: 'Validation error',
@@ -128,18 +103,22 @@ export const createProduct = async (req: any, res: any) => {
         }
         const data = validation.data;
         const productCode = await generateProductCode(tenantId);
+
         const product = await prisma.product.create({
             data: {
                 tenantId,
                 productCode,
                 name: data.name,
+                unit: data.unit,                 // ✅ unit saved
                 description: data.description || null,
+                modelNumber: data.modelNumber,   // if your schema has it
                 stock: {
                     create: { quantityOnHand: 0, reservedQuantity: 0 },
                 },
             },
             include: { stock: true },
         });
+
         await prisma.activityLog.create({
             data: {
                 tenantId,
@@ -150,6 +129,7 @@ export const createProduct = async (req: any, res: any) => {
                 details: { name: product.name },
             },
         });
+
         res.status(201).json(product);
     } catch (error) {
         console.error(error);
@@ -157,10 +137,13 @@ export const createProduct = async (req: any, res: any) => {
     }
 };
 
+// ────────── UPDATE ──────────
 export const updateProduct = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
         const productId = parseInt(req.params.id);
+
+        // ✅ Use external (partial) validator – allows updating unit
         const validation = updateProductSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
@@ -172,14 +155,15 @@ export const updateProduct = async (req: any, res: any) => {
             });
         }
         const data = validation.data;
+
         const existing = await prisma.product.findFirst({ where: { id: productId, tenantId } });
         if (!existing) return res.status(404).json({ message: 'Product not found' });
 
+        // ✅ Spread all allowed fields – unit will be updated if provided
         const updated = await prisma.product.update({
             where: { id: productId },
             data: {
-                name: data.name,
-                description: data.description,
+                ...data,   // includes name, unit, description, modelNumber (if sent)
             },
             include: { stock: true },
         });
@@ -202,6 +186,7 @@ export const updateProduct = async (req: any, res: any) => {
     }
 };
 
+// ────────── DELETE ──────────
 export const deleteProduct = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -211,7 +196,9 @@ export const deleteProduct = async (req: any, res: any) => {
 
         const usedInStock = await prisma.stockMovement.count({ where: { productId } });
         if (usedInStock > 0) {
-            return res.status(409).json({ message: 'Cannot delete product with existing stock movements. Consider archiving instead.' });
+            return res.status(409).json({
+                message: 'Cannot delete product with existing stock movements. Consider archiving instead.',
+            });
         }
 
         await prisma.product.delete({ where: { id: productId } });

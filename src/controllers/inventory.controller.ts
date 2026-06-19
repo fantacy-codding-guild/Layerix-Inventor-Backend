@@ -1,3 +1,4 @@
+//backend\src\controllers\inventory.controller.ts
 import prisma from '../lib/prisma';
 import {
     stockInSchema,
@@ -52,11 +53,11 @@ export const getStockOverview = async (req: any, res: any) => {
             const brandNames = p.brands.map(pb => pb.brand.name).join(', ');
             return {
                 id: p.id,
+                productCode: p.productCode,    // <-- ADD THIS
                 name: p.name,
-
+                unit: p.unit,                  // <-- ensure unit is returned (already present)
                 brand: brandNames || null,
                 category: p.serviceCategory?.name,
-
                 minStockLevel: p.minStockLevel,
                 currentStock: onHand,
                 reservedStock: reserved,

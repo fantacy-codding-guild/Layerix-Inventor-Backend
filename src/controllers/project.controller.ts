@@ -138,7 +138,7 @@ export const getProject = async (req: any, res: any) => {
 // ─── Create (no customerId, status, city, startDate, endDate, projectType) ───
 export const createProject = async (req: any, res: any) => {
     try {
-        const tenantId = req.user.tenantId;
+        const tenantId: number = req.user.tenantId;  // 👈 cast to number
         const validation = projectSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
@@ -171,7 +171,6 @@ export const createProject = async (req: any, res: any) => {
                 projectValue: data.projectValue,
                 completionPercent: data.completionPercent ?? 0,
                 projectManagerId: data.projectManagerId ?? null,
-                // Fields that were removed are not set – they will default to null/0
             },
         });
 

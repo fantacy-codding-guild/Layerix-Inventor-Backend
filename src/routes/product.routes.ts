@@ -9,9 +9,13 @@ import {
     updateProduct,
     deleteProduct,
 } from '../controllers/product.controller';
+import { getProductUnits } from '../controllers/productUnit.controller';   // new import
+
 
 const router = Router();
 router.use(authenticate);
+
+router.get('/:id/units', getProductUnits);
 
 router.get('/', getProducts);
 router.get('/:id', getProduct);
