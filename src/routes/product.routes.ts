@@ -15,7 +15,6 @@ import { getProductUnits } from '../controllers/productUnit.controller';   // ne
 const router = Router();
 router.use(authenticate);
 
-router.get('/:id/units', getProductUnits);
 
 router.get('/', getProducts);
 router.get('/:id', getProduct);
