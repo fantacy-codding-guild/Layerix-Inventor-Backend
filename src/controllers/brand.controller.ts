@@ -1,4 +1,3 @@
-//backend\src\controllers\brand.controller.ts
 import prisma from '../lib/prisma';
 import { brandSchema } from '../validators/brand.validator';
 
@@ -24,7 +23,6 @@ export const createBrand = async (req: any, res: any) => {
         const { name } = validation.data;
         const tenantId = req.user.tenantId;
 
-        // Check duplicate
         const exists = await prisma.brand.findFirst({
             where: { tenantId, name: { equals: name, mode: 'insensitive' } },
         });
@@ -54,7 +52,6 @@ export const updateBrand = async (req: any, res: any) => {
         const exists = await prisma.brand.findFirst({ where: { id, tenantId } });
         if (!exists) return res.status(404).json({ message: 'Brand not found' });
 
-        // Check duplicate excluding self
         const duplicate = await prisma.brand.findFirst({
             where: { tenantId, name: { equals: name, mode: 'insensitive' }, NOT: { id } },
         });
@@ -80,10 +77,14 @@ export const deleteBrand = async (req: any, res: any) => {
         const brand = await prisma.brand.findFirst({ where: { id, tenantId } });
         if (!brand) return res.status(404).json({ message: 'Brand not found' });
 
-        // Check if any products are linked through the join table
-        const productCount = await prisma.productBrand.count({
-            where: { brandId: id },
+        // Check if any products contain this brand name in the brands array
+        const productCount = await prisma.product.count({
+            where: {
+                tenantId,
+                brands: { has: brand.name },   // ← use has on the array field
+            },
         });
+
         if (productCount > 0) {
             return res.status(409).json({ message: 'Cannot delete brand with existing product associations.' });
         }

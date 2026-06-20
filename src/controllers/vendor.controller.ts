@@ -1,4 +1,3 @@
-//backend\src\controllers\vendor.controller.ts
 import prisma from '../lib/prisma';
 import { z } from 'zod';
 
@@ -6,7 +5,7 @@ import { z } from 'zod';
 const vendorSchema = z.object({
     name: z.string().min(1, 'Company name is required'),
     gstNumber: z.string().optional(),
-    website: z.string().url().optional().or(z.literal('')),
+    // website removed – no such field in schema
 });
 
 const contactSchema = z.object({
@@ -108,11 +107,15 @@ export const deleteVendor = async (req: any, res: any) => {
         const id = parseInt(req.params.id);
         const vendor = await prisma.vendor.findFirst({ where: { id, tenantId } });
         if (!vendor) return res.status(404).json({ message: 'Vendor not found' });
-        // Check if vendor has purchase orders
-        const poCount = await prisma.purchaseOrder.count({ where: { vendorId: id } });
-        if (poCount > 0) {
-            return res.status(409).json({ message: 'Cannot delete vendor with existing purchase orders.' });
+
+        // Check if vendor has stock movements (from the StockMovement relation)
+        const movementCount = await prisma.stockMovement.count({
+            where: { fromVendorId: id },
+        });
+        if (movementCount > 0) {
+            return res.status(409).json({ message: 'Cannot delete vendor with existing stock movements.' });
         }
+
         await prisma.vendor.delete({ where: { id } });
         res.json({ message: 'Vendor deleted' });
     } catch (error) {

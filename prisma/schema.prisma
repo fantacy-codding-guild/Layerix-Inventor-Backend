@@ -4,13 +4,11 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  // url is configured in prisma.config.js
 }
 
 // --------------------------------------------------------
-// TENANT & AUTHENTICATION
+// TENANT
 // --------------------------------------------------------
-
 model Tenant {
   id            Int      @id @default(autoincrement())
   name          String
@@ -26,73 +24,57 @@ model Tenant {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  users                User[]
-  roles                Role[]
-  settings             Setting[]
-  brands               Brand[]
-  serviceCategories    ServiceCategory[]
-  products             Product[]
-  vendors              Vendor[]
-  projectMaterialMovements  ProjectMaterialMovement[]
-  customers            Customer[]
-  projects             Project[]
-  purchaseRequests     PurchaseRequest[]
-  purchaseOrders       PurchaseOrder[]
-  goodsReceived        GoodsReceived[]
-  vendorInvoices       VendorInvoice[]
-  amcs                 AMC[]
-  breakFixes           BreakFix[]
-  serviceTickets       ServiceTicket[]
-  siteVisits           SiteVisit[]
-  documents            Document[]
-  activityLogs         ActivityLog[]
-  stockMovements       StockMovement[]
-  states               State[]
-  projectMovements     ProjectStockMovement[]
-  stockTransfers       StockTransfer[]
+  users             User[]
+  roles             Role[]
+  settings          Setting[]
+  brands            Brand[]
+  serviceCategories ServiceCategory[]
+  products          Product[]
+  vendors           Vendor[]
+  customers         Customer[]
+  projects          Project[]
+  states            State[]
+  activityLogs      ActivityLog[]
+  stockMovements    StockMovement[]
+
+  inventoryItems     InventoryItem[]
+
 }
 
-model User {
-  id            Int      @id @default(autoincrement())
-  tenantId      Int
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  projectMaterialMovements  ProjectMaterialMovement[]  @relation("UserMaterialMovement")
-  name          String
-  email         String
-  passwordHash  String
-  roleId        Int
-  role          Role     @relation(fields: [roleId], references: [id])
-  isActive      Boolean  @default(true)
-  isVerified    Boolean  @default(false)
-  otpCode       String?
-  otpExpiry     DateTime?
-  lastLogin     DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  forcePasswordReset Boolean @default(false)
 
-  refreshTokens       RefreshToken[]
-  activityLogs        ActivityLog[]
-  createdPurchaseOrders PurchaseOrder[]  @relation("CreatedPO")
-  managedProjects     Project[]          @relation("ProjectManager")
-  serviceTickets      ServiceTicket[]    @relation("AssignedTickets")
-  siteVisits          SiteVisit[]
-  goodsReceived       GoodsReceived[]    @relation("ReceivedBy")
-  stockMovements      StockMovement[]    @relation("StockMovementUser")
-  purchaseRequests    PurchaseRequest[]  @relation("PurchaseRequestRequester")
-  documents           Document[]         @relation("DocumentUploader")
-  projectMovements    ProjectStockMovement[] @relation("ProjectMovementUser")
-  transferApprovals   StockTransfer[]    @relation("TransferApprover")
-  transferDispatches  StockTransfer[]    @relation("TransferDispatcher")
-  transferReceives    StockTransfer[]    @relation("TransferReceiver")
+
+// --------------------------------------------------------
+// USER
+// --------------------------------------------------------
+model User {
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name               String
+  email              String
+  passwordHash       String
+  roleId             Int
+  role               Role     @relation(fields: [roleId], references: [id])
+  isActive           Boolean  @default(true)
+  isVerified         Boolean  @default(false)
+  otpCode            String?
+  otpExpiry          DateTime?
+  lastLogin          DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  forcePasswordReset Boolean  @default(false)
+
+  refreshTokens   RefreshToken[]
+  activityLogs    ActivityLog[]
+  managedProjects Project[]        @relation("ProjectManager")
+  stockMovements  StockMovement[]  @relation("StockMovementUser")
 
   @@unique([tenantId, email])
 }
 
 // --------------------------------------------------------
-// Role, RefreshToken, ActivityLog, Setting
+// ROLES, TOKENS, LOGS, SETTINGS
 // --------------------------------------------------------
-
 model Role {
   id          Int      @id @default(autoincrement())
   tenantId    Int
@@ -141,9 +123,8 @@ model Setting {
 }
 
 // --------------------------------------------------------
-// MASTERS (Brand, ServiceCategory, Product, Stock)
+// MASTERS
 // --------------------------------------------------------
-
 model Brand {
   id        Int      @id @default(autoincrement())
   tenantId  Int
@@ -153,19 +134,7 @@ model Brand {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  products  ProductBrand[]
-  projectMaterialMovements  ProjectMaterialMovement[]
-
   @@unique([tenantId, name])
-}
-
-model ProductBrand {
-  productId Int
-  brandId   Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-  brand     Brand   @relation(fields: [brandId], references: [id], onDelete: Cascade)
-
-  @@id([productId, brandId])
 }
 
 model ServiceCategory {
@@ -187,50 +156,39 @@ model Product {
   tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   productCode       String
   name              String
-
   modelNumber       String?
   serviceCategoryId Int?
   serviceCategory   ServiceCategory? @relation(fields: [serviceCategoryId], references: [id])
   unit              String    @default("Pcs")
   description       String?
   minStockLevel     Int       @default(0)
+
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  stock              Stock?
-  vendorProducts     VendorProduct[]
-  projectMaterialPlans ProjectMaterialPlan[]
-  stockMovements     StockMovement[]
-  reservations       StockReservation[]
-  purchaseRequestItems PurchaseRequestItem[]
-  purchaseOrderItems PurchaseOrderItem[]
-  goodsReceivedItems GoodsReceivedItem[]
-  projectStocks      ProjectStock[]
-  projectMovements   ProjectStockMovement[]
-  transferItems      StockTransferItem[]
-
-  brands             ProductBrand[]
-  projectMaterialMovements  ProjectMaterialMovement[]
+ 
+  vendorProducts VendorProduct[]
+  projectStocks  ProjectStock[]
+  stockMovements StockMovement[]
 
   @@unique([tenantId, productCode])
   @@index([tenantId, name])
-    productUnits ProductUnit[]   // <-- add this
 
+  inventoryItems     InventoryItem[]
 }
 
-model Stock {
-  productId        Int      @id
-  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  quantityOnHand   Int      @default(0)
-  reservedQuantity Int      @default(0)
-  averageCost      Decimal? @db.Decimal(10,2)
-  updatedAt        DateTime @updatedAt
-}
+// model Stock {
+//  productId        Int      @id
+//  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+//  quantityOnHand   Int      @default(0)
+//  reservedQuantity Int      @default(0)
+//  averageCost      Decimal? @db.Decimal(10,2)
+//  updatedAt        DateTime @updatedAt
+// }
 
 // --------------------------------------------------------
 // VENDORS & CUSTOMERS
 // --------------------------------------------------------
-
 model Vendor {
   id          Int      @id @default(autoincrement())
   tenantId    Int
@@ -242,13 +200,11 @@ model Vendor {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  vendorProducts  VendorProduct[]
-  purchaseOrders  PurchaseOrder[]
-  goodsReceived   GoodsReceived[]
-  vendorInvoices  VendorInvoice[]
-  stockMovements  StockMovement[]   @relation("FromVendor")
-  contacts  VendorContact[]
-  projectMaterialMovements  ProjectMaterialMovement[]   @relation("VendorMaterialMovement")
+  vendorProducts VendorProduct[]
+  contacts       VendorContact[]
+  stockMovements StockMovement[] @relation("FromVendor")
+
+  inventoryItems  InventoryItem[]   @relation("VendorInventoryItems")
 
   @@index([tenantId, name])
 }
@@ -300,11 +256,7 @@ model Customer {
   updatedAt DateTime @updatedAt
 
   projects       Project[]
-  serviceTickets ServiceTicket[]
-  amcContracts   AMC[]
-  siteVisits     SiteVisit[]
-  breakFixes     BreakFix[]
-  stockMovements StockMovement[]   @relation("ToCustomer")
+  stockMovements StockMovement[] @relation("ToCustomer")
 
   @@index([tenantId, name])
 }
@@ -312,7 +264,6 @@ model Customer {
 // --------------------------------------------------------
 // STATE
 // --------------------------------------------------------
-
 model State {
   id             Int      @id @default(autoincrement())
   tenantId       Int
@@ -324,7 +275,7 @@ model State {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  projects       Project[]
+  projects Project[]
   @@unique([tenantId, name])
   @@unique([tenantId, code])
 }
@@ -332,7 +283,6 @@ model State {
 // --------------------------------------------------------
 // PROJECTS
 // --------------------------------------------------------
-
 enum ProjectStatus {
   NOT_STARTED
   IN_PROGRESS
@@ -367,58 +317,9 @@ model Project {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  milestones        ProjectMilestone[]
-  materialPlans     ProjectMaterialPlan[]
-  reservations      StockReservation[]
-  siteVisits        SiteVisit[]
-  serviceTickets    ServiceTicket[]
-  amcs              AMC[]
-  stockMovements    StockMovement[]   @relation("ToProject")
-  projectStock      ProjectStock[]
-  projectMovements  ProjectStockMovement[]
-  outgoingTransfers StockTransfer[]   @relation("FromProject")
-  incomingTransfers StockTransfer[]   @relation("ToProject")
-  projectMaterialMovements  ProjectMaterialMovement[]
+  projectStock   ProjectStock[]
+  stockMovements StockMovement[] @relation("ToProject")
 }
-
-// --------------------------------------------------------
-// PROJECT MATERIAL PLANS
-// --------------------------------------------------------
-
-model ProjectMilestone {
-  id          Int           @id @default(autoincrement())
-  projectId   Int
-  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  name        String
-  description String?
-  startDate   DateTime?
-  endDate     DateTime?
-  progress    Float         @default(0)
-  status      ProjectStatus @default(NOT_STARTED)
-  orderIndex  Int           @default(0)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-
-  materialPlans ProjectMaterialPlan[]
-}
-
-model ProjectMaterialPlan {
-  id               Int      @id @default(autoincrement())
-  projectId        Int
-  productId        Int
-  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  product          Product  @relation(fields: [productId], references: [id])
-  plannedQuantity  Int
-  consumedQuantity Int      @default(0)
-  milestoneId      Int?
-  milestone        ProjectMilestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-}
-
-// --------------------------------------------------------
-// PROJECT INVENTORY (new models)
-// --------------------------------------------------------
 
 model ProjectStock {
   projectId        Int
@@ -432,75 +333,9 @@ model ProjectStock {
   @@id([projectId, productId])
 }
 
-model ProjectStockMovement {
-  id            Int          @id @default(autoincrement())
-  tenantId      Int
-  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  projectId     Int
-  project       Project      @relation(fields: [projectId], references: [id])
-  productId     Int
-  product       Product      @relation(fields: [productId], references: [id])
-  type          MovementType
-  quantity      Int
-  unitPrice     Decimal?     @db.Decimal(10,2)
-  date          DateTime     @default(now())
-  notes         String?
-  createdBy     Int?
-  user          User?        @relation("ProjectMovementUser", fields: [createdBy], references: [id])
-  createdAt     DateTime     @default(now())
-
-  @@index([tenantId, projectId, date])
-}
-
 // --------------------------------------------------------
-// STOCK TRANSFERS
+// STOCK MOVEMENTS
 // --------------------------------------------------------
-
-enum TransferStatus {
-  PENDING
-  APPROVED
-  DISPATCHED
-  RECEIVED
-  CANCELLED
-}
-
-model StockTransfer {
-  id              Int            @id @default(autoincrement())
-  tenantId        Int
-  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  transferNumber  String         @unique
-  fromProjectId   Int?
-  fromProject     Project?       @relation("FromProject", fields: [fromProjectId], references: [id])
-  toProjectId     Int?
-  toProject       Project?       @relation("ToProject", fields: [toProjectId], references: [id])
-  status          TransferStatus @default(PENDING)
-  approvedBy      Int?
-  approver        User?          @relation("TransferApprover", fields: [approvedBy], references: [id])
-  dispatchedBy    Int?
-  dispatcher      User?          @relation("TransferDispatcher", fields: [dispatchedBy], references: [id])
-  receivedBy      Int?
-  receiver        User?          @relation("TransferReceiver", fields: [receivedBy], references: [id])
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-
-  items           StockTransferItem[]
-}
-
-model StockTransferItem {
-  id              Int            @id @default(autoincrement())
-  transferId      Int
-  transfer        StockTransfer  @relation(fields: [transferId], references: [id], onDelete: Cascade)
-  productId       Int
-  product         Product        @relation(fields: [productId], references: [id])
-  quantity        Int
-  receivedQty     Int            @default(0)
-  remarks         String?
-}
-
-// --------------------------------------------------------
-// INVENTORY & STOCK MOVEMENTS
-// --------------------------------------------------------
-
 enum MovementType {
   STOCK_IN
   STOCK_OUT
@@ -540,310 +375,22 @@ model StockMovement {
   @@index([tenantId, productId, date])
 }
 
-model StockReservation {
-  id        Int      @id @default(autoincrement())
-  productId Int
-  product   Product  @relation(fields: [productId], references: [id])
-  projectId Int
-  project   Project  @relation(fields: [projectId], references: [id])
-  quantity  Int
-  status    String   @default("PENDING")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-// --------------------------------------------------------
-// PROCUREMENT
-// --------------------------------------------------------
-
-model PurchaseRequest {
-  id            Int      @id @default(autoincrement())
-  tenantId      Int
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  requestNumber String
-  requestedBy   Int?
-  requester     User?    @relation("PurchaseRequestRequester", fields: [requestedBy], references: [id])
-  dateRequired  DateTime?
-  status        String   @default("DRAFT")
-  notes         String?  @db.Text
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  items         PurchaseRequestItem[]
-  @@index([tenantId, requestNumber])
-}
-
-model PurchaseRequestItem {
-  id                Int             @id @default(autoincrement())
-  purchaseRequestId Int
-  purchaseRequest   PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
-  productId         Int
-  product           Product         @relation(fields: [productId], references: [id])
-  quantity          Int
-  estimatedPrice    Decimal?        @db.Decimal(10,2)
-}
-
-enum PurchaseOrderStatus {
-  DRAFT
-  SENT
-  PARTIALLY_RECEIVED
-  COMPLETED
-  CANCELLED
-}
-
-model PurchaseOrder {
-  id                    Int                @id @default(autoincrement())
-  tenantId              Int
-  tenant                Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  orderNumber           String
-  vendorId              Int
-  vendor                Vendor             @relation(fields: [vendorId], references: [id])
-  orderDate             DateTime           @default(now())
-  expectedDeliveryDate  DateTime?
-  status                PurchaseOrderStatus @default(DRAFT)
-  totalAmount           Decimal?           @db.Decimal(12,2) @default(0)
-  notes                 String?            @db.Text
-  createdBy             Int?
-  creator               User?              @relation("CreatedPO", fields: [createdBy], references: [id])
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
-
-  items         PurchaseOrderItem[]
-  goodsReceived GoodsReceived[]
-  invoices      InvoicePurchaseOrder[]
-  @@unique([tenantId, orderNumber])
-}
-
-model PurchaseOrderItem {
-  id              Int            @id @default(autoincrement())
-  purchaseOrderId Int
-  purchaseOrder   PurchaseOrder  @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  productId       Int
-  product         Product        @relation(fields: [productId], references: [id])
-  quantity        Int
-  unitPrice       Decimal?       @db.Decimal(10,2)
-  totalPrice      Decimal?       @db.Decimal(10,2)
-}
-
-model GoodsReceived {
-  id              Int       @id @default(autoincrement())
-  tenantId        Int
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  grnNumber       String
-  purchaseOrderId Int?
-  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
-  vendorId        Int
-  vendor          Vendor    @relation(fields: [vendorId], references: [id])
-  receivedDate    DateTime  @default(now())
-  receivedBy      Int?
-  receiver        User?     @relation("ReceivedBy", fields: [receivedBy], references: [id])
-  notes           String?
-  createdAt       DateTime  @default(now())
-
-  items           GoodsReceivedItem[]
-  @@unique([tenantId, grnNumber])
-}
-
-model GoodsReceivedItem {
-  id                  Int            @id @default(autoincrement())
-  goodsReceivedId     Int
-  goodsReceived       GoodsReceived  @relation(fields: [goodsReceivedId], references: [id], onDelete: Cascade)
-  productId           Int
-  product             Product        @relation(fields: [productId], references: [id])
-  quantityReceived    Int
-  purchaseOrderItemId Int?
-}
-
-model VendorInvoice {
-  id            Int      @id @default(autoincrement())
-  tenantId      Int
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoiceNumber String
-  vendorId      Int
-  vendor        Vendor   @relation(fields: [vendorId], references: [id])
-  invoiceDate   DateTime @default(now())
-  dueDate       DateTime?
-  totalAmount   Decimal? @db.Decimal(12,2)
-  status        String   @default("PENDING")
-  paymentDate   DateTime?
-  notes         String?  @db.Text
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  purchaseOrders InvoicePurchaseOrder[]
-  @@unique([tenantId, invoiceNumber])
-}
-
-model InvoicePurchaseOrder {
-  invoiceId       Int
-  invoice         VendorInvoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  purchaseOrderId Int
-  purchaseOrder   PurchaseOrder  @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-
-  @@id([invoiceId, purchaseOrderId])
-}
-
-// --------------------------------------------------------
-// OPERATIONS
-// --------------------------------------------------------
-
-model AMC {
-  id              Int      @id @default(autoincrement())
-  tenantId        Int
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customerId      Int
-  customer        Customer @relation(fields: [customerId], references: [id])
-  projectId       Int?
-  project         Project? @relation(fields: [projectId], references: [id])
-  contractNumber  String
-  startDate       DateTime
-  endDate         DateTime
-  serviceType     String
-  frequency       String?
-  amount          Decimal? @db.Decimal(12,2)
-  status          String   @default("ACTIVE")
-  notes           String?  @db.Text
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@unique([tenantId, contractNumber])
-}
-
-model BreakFix {
-  id           Int           @id @default(autoincrement())
-  tenantId     Int
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customerId   Int
-  customer     Customer      @relation(fields: [customerId], references: [id])
-  ticketId     Int?
-  ticket       ServiceTicket? @relation(fields: [ticketId], references: [id])
-  description  String        @db.Text
-  reportedDate DateTime      @default(now())
-  resolvedDate DateTime?
-  status       String        @default("OPEN")
-  charges      Decimal?      @db.Decimal(10,2)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-}
-
-model ServiceTicket {
-  id              Int           @id @default(autoincrement())
-  tenantId        Int
-  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketNumber    String
-  customerId      Int
-  customer        Customer      @relation(fields: [customerId], references: [id])
-  contactPerson   String?
-  issueType       String?
-  description     String        @db.Text
-  priority        String        @default("MEDIUM")
-  status          String        @default("OPEN")
-  assignedTo      Int?
-  assignee        User?         @relation("AssignedTickets", fields: [assignedTo], references: [id])
-  projectId       Int?
-  project         Project?      @relation(fields: [projectId], references: [id])
-  siteVisitRequired Boolean     @default(false)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  siteVisits      SiteVisit[]
-  breakFixes      BreakFix[]
-  @@unique([tenantId, ticketNumber])
-}
-
-model SiteVisit {
-  id            Int           @id @default(autoincrement())
-  tenantId      Int
-  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ticketId      Int?
-  ticket        ServiceTicket? @relation(fields: [ticketId], references: [id])
-  projectId     Int?
-  project       Project?      @relation(fields: [projectId], references: [id])
-  customerId    Int
-  customer      Customer      @relation(fields: [customerId], references: [id])
-  scheduledDate DateTime
-  actualDate    DateTime?
-  engineerId    Int?
-  engineer      User?         @relation(fields: [engineerId], references: [id])
-  purpose       String?       @db.Text
-  findings      String?       @db.Text
-  status        String        @default("SCHEDULED")
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-}
-
-// --------------------------------------------------------
-// DOCUMENTS
-// --------------------------------------------------------
-
-enum EntityType {
-  PRODUCT
-  VENDOR
-  CUSTOMER
-  PROJECT
-  TICKET
-  PURCHASE_ORDER
-  GOODS_RECEIVED
-  VENDOR_INVOICE
-  AMC
-  SITE_VISIT
-}
-
-model Document {
-  id          Int        @id @default(autoincrement())
-  tenantId    Int
-  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  fileName    String
-  fileUrl     String
-  fileType    String?
-  entityType  EntityType
-  entityId    Int
-  uploadedBy  Int?
-  uploader    User?      @relation("DocumentUploader", fields: [uploadedBy], references: [id])
-  createdAt   DateTime   @default(now())
-
-  @@index([tenantId, entityType, entityId])
-}
-
-// --------------------------------------------------------
-// PROJECT MATERIAL MOVEMENTS (new)
-// --------------------------------------------------------
-
-enum ProjectMaterialType {
-  ORDER
-  CONSUME
-  TRANSFER_OUT   // Return to office
-}
-
-model ProjectMaterialMovement {
-  id           Int                   @id @default(autoincrement())
-  tenantId     Int
-  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  projectId    Int
-  project      Project               @relation(fields: [projectId], references: [id])
-  productId    Int
-  product      Product               @relation(fields: [productId], references: [id])
-  type         ProjectMaterialType
-  quantity     Int
-  unitPrice    Decimal?              @db.Decimal(10,2)
-  fromVendorId Int?
-  fromVendor   Vendor?               @relation("VendorMaterialMovement", fields: [fromVendorId], references: [id])
-  brandId      Int?
-  brand        Brand?                @relation(fields: [brandId], references: [id])
-  notes        String?
-  date         DateTime              @default(now())
-  createdBy    Int?
-  user         User?                 @relation("UserMaterialMovement", fields: [createdBy], references: [id])
-  createdAt    DateTime              @default(now())
-
-  @@index([tenantId, projectId, date])
-}
-
-model ProductUnit {
+model InventoryItem {
+  id               Int       @id @default(autoincrement())
+  tenantId         Int
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   productId        Int
-  unit             String
-  conversionFactor Float   // how many base units in one unit of this type
-  product          Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product          Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  brand            String    // e.g. "commscope"
+  unit             String    // e.g. "Pcs"
+  vendorId         Int?
+  vendor           Vendor?   @relation("VendorInventoryItems", fields: [vendorId], references: [id])
+  quantityOnHand   Int       @default(0)
+  reservedQuantity Int       @default(0)
+  averageCost      Decimal?  @db.Decimal(10,2)
+  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime  @default(now())
 
-  @@id([productId, unit])
+  @@unique([tenantId, productId, brand, unit, vendorId])
+  @@index([tenantId, productId])
 }

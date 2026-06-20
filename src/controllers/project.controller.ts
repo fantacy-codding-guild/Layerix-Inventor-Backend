@@ -1,7 +1,7 @@
 import prisma from '../lib/prisma';
 import { z } from 'zod';
 
-// ─── Validation (simplified – removed projectType, customerId, status, city, startDate, endDate) ───
+// ─── Validation (simplified) ──────────────────────────────────
 const projectSchema = z.object({
     name: z.string().min(1, 'Name is required').max(200),
     code: z.string().optional(),
@@ -15,19 +15,7 @@ const projectSchema = z.object({
 
 const updateProjectSchema = projectSchema.partial();
 
-// ─── Helpers ────────────────────────────────────────────────────
-async function attachMaterialAggregation(project: any) {
-    const aggregations = await prisma.projectMaterialPlan.aggregate({
-        where: { projectId: project.id },
-        _sum: { plannedQuantity: true, consumedQuantity: true },
-    });
-    project.totalAllocated = aggregations._sum.plannedQuantity ?? 0;
-    project.totalConsumed = aggregations._sum.consumedQuantity ?? 0;
-    project.totalRemaining = project.totalAllocated - project.totalConsumed;
-    return project;
-}
-
-// ─── List / Search (removed customerId & status filters) ────────
+// ─── List / Search ──────────────────────────────────────────
 export const getProjects = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -59,10 +47,8 @@ export const getProjects = async (req: any, res: any) => {
             prisma.project.count({ where }),
         ]);
 
-        const data = await Promise.all(projects.map(p => attachMaterialAggregation(p)));
-
         res.json({
-            data,
+            data: projects,
             pagination: {
                 page: Number(page),
                 limit: Number(limit),
@@ -76,7 +62,7 @@ export const getProjects = async (req: any, res: any) => {
     }
 };
 
-// ─── Single project detail ────────────────────────────────────
+// ─── Single project detail ─────────────────────────────────
 export const getProject = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -88,17 +74,8 @@ export const getProject = async (req: any, res: any) => {
                 customer: { select: { id: true, name: true } },
                 state: { select: { id: true, name: true, code: true } },
                 projectManager: { select: { id: true, name: true } },
-                milestones: { orderBy: { orderIndex: 'asc' } },
-                materialPlans: {
-                    include: {
-                        product: { select: { id: true, name: true, unit: true } },
-                        milestone: { select: { id: true, name: true } },
-                    },
-                    orderBy: { product: { name: 'asc' } },
-                },
-                reservations: {
+                projectStock: {
                     include: { product: { select: { id: true, name: true } } },
-                    where: { status: { not: 'CANCELLED' } },
                 },
                 stockMovements: {
                     take: 50,
@@ -108,26 +85,11 @@ export const getProject = async (req: any, res: any) => {
                         user: { select: { id: true, name: true } },
                     },
                 },
-                projectStock: {
-                    include: { product: { select: { id: true, name: true } } },
-                },
-                incomingTransfers: {
-                    include: {
-                        items: { include: { product: { select: { id: true, name: true } } } },
-                        fromProject: { select: { id: true, name: true } },
-                    },
-                },
-                outgoingTransfers: {
-                    include: {
-                        items: { include: { product: { select: { id: true, name: true } } } },
-                        toProject: { select: { id: true, name: true } },
-                    },
-                },
             },
         });
 
         if (!project) return res.status(404).json({ message: 'Project not found' });
-        await attachMaterialAggregation(project);
+
         res.json(project);
     } catch (error) {
         console.error(error);
@@ -135,10 +97,10 @@ export const getProject = async (req: any, res: any) => {
     }
 };
 
-// ─── Create (no customerId, status, city, startDate, endDate, projectType) ───
+// ─── Create ────────────────────────────────────────────────
 export const createProject = async (req: any, res: any) => {
     try {
-        const tenantId: number = req.user.tenantId;  // 👈 cast to number
+        const tenantId: number = req.user.tenantId;
         const validation = projectSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
@@ -192,7 +154,7 @@ export const createProject = async (req: any, res: any) => {
     }
 };
 
-// ─── Update (removed fields as well) ──────────────────────────
+// ─── Update ────────────────────────────────────────────────
 export const updateProject = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -211,7 +173,7 @@ export const updateProject = async (req: any, res: any) => {
 
         const data = validation.data;
 
-        // Optional validations for state and manager
+        // Optional validations
         if (data.stateId) {
             const st = await prisma.state.findFirst({ where: { id: data.stateId, tenantId } });
             if (!st) return res.status(400).json({ message: 'State not found' });
@@ -246,7 +208,7 @@ export const updateProject = async (req: any, res: any) => {
     }
 };
 
-// ─── Delete (unchanged) ──────────────────────────────────────
+// ─── Delete ────────────────────────────────────────────────
 export const deleteProject = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;

@@ -6,6 +6,7 @@ export const createProductSchema = z.object({
     modelNumber: z.string().max(100).optional(),
     unit: z.string().max(20).default('Pcs').optional(),
     description: z.string().max(1000).optional(),
+    brandId: z.number().optional(),                // ← add this
 });
 
 export const updateProductSchema = createProductSchema.partial();

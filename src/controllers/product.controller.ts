@@ -1,9 +1,8 @@
-// backend/src/controllers/product.controller.ts
 import prisma from '../lib/prisma';
 import {
     createProductSchema,
     updateProductSchema,
-} from '../validators/product.validator';   // ✅ imported validators with unit
+} from '../validators/product.validator';
 
 const generateProductCode = async (tenantId: number) => {
     const today = new Date();
@@ -20,7 +19,6 @@ const generateProductCode = async (tenantId: number) => {
     return `PRD-${datePart}-${String(countToday + 1).padStart(3, '0')}`;
 };
 
-// ────────── READ ──────────
 export const getProducts = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -32,17 +30,13 @@ export const getProducts = async (req: any, res: any) => {
             where.OR = [
                 { name: { contains: search, mode: 'insensitive' } },
                 { productCode: { contains: search, mode: 'insensitive' } },
-                { sku: { contains: search, mode: 'insensitive' } },
             ];
         }
 
         const [products, total] = await Promise.all([
             prisma.product.findMany({
                 where,
-                include: {
-                    stock: true,
-                    brands: { include: { brand: { select: { id: true, name: true } } } },
-                },
+                // no stock include – stock is now separate inventoryItems
                 orderBy: { [sortBy as string]: sortOrder },
                 skip,
                 take: Number(limit),
@@ -50,13 +44,9 @@ export const getProducts = async (req: any, res: any) => {
             prisma.product.count({ where }),
         ]);
 
-        const data = products.map(p => ({
-            ...p,
-            brands: p.brands.map(pb => pb.brand),
-        }));
-
+        // Return product data only – stock/quantity is now in inventoryItems
         res.json({
-            data,
+            data: products,
             pagination: {
                 page: Number(page),
                 limit: Number(limit),
@@ -74,9 +64,22 @@ export const getProduct = async (req: any, res: any) => {
     try {
         const product = await prisma.product.findFirst({
             where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
-            // no includes – only the basic fields (id, name, unit, description, etc.)
+            include: {
+                vendorProducts: {
+                    include: {
+                        vendor: {
+                            select: { id: true, name: true, companyName: true, phone: true, email: true },
+                        },
+                    },
+                },
+                projectStocks: {
+                    include: {
+                        project: { select: { id: true, name: true } },
+                    },
+                },
+                // No stock include – stock is now separate
+            },
         });
-
         if (!product) return res.status(404).json({ message: 'Product not found' });
 
         res.json(product);
@@ -86,11 +89,9 @@ export const getProduct = async (req: any, res: any) => {
     }
 };
 
-// ────────── CREATE ──────────
 export const createProduct = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
-        // ✅ Use external validator – it accepts unit, modelNumber, etc.
         const validation = createProductSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
@@ -104,19 +105,17 @@ export const createProduct = async (req: any, res: any) => {
         const data = validation.data;
         const productCode = await generateProductCode(tenantId);
 
+        // No stock creation – stock is now separate inventoryItems
         const product = await prisma.product.create({
             data: {
                 tenantId,
                 productCode,
                 name: data.name,
-                unit: data.unit,                 // ✅ unit saved
+                unit: data.unit,
                 description: data.description || null,
-                modelNumber: data.modelNumber,   // if your schema has it
-                stock: {
-                    create: { quantityOnHand: 0, reservedQuantity: 0 },
-                },
+                modelNumber: data.modelNumber,
+                // No brands array – brands are part of inventoryItems
             },
-            include: { stock: true },
         });
 
         await prisma.activityLog.create({
@@ -137,13 +136,11 @@ export const createProduct = async (req: any, res: any) => {
     }
 };
 
-// ────────── UPDATE ──────────
 export const updateProduct = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
         const productId = parseInt(req.params.id);
 
-        // ✅ Use external (partial) validator – allows updating unit
         const validation = updateProductSchema.safeParse(req.body);
         if (!validation.success) {
             return res.status(400).json({
@@ -159,13 +156,17 @@ export const updateProduct = async (req: any, res: any) => {
         const existing = await prisma.product.findFirst({ where: { id: productId, tenantId } });
         if (!existing) return res.status(404).json({ message: 'Product not found' });
 
-        // ✅ Spread all allowed fields – unit will be updated if provided
+        // Only fields that exist on Product
+        const updateData: any = {
+            name: data.name,
+            unit: data.unit,
+            description: data.description,
+            modelNumber: data.modelNumber,
+        };
+
         const updated = await prisma.product.update({
             where: { id: productId },
-            data: {
-                ...data,   // includes name, unit, description, modelNumber (if sent)
-            },
-            include: { stock: true },
+            data: updateData,
         });
 
         await prisma.activityLog.create({
@@ -186,7 +187,6 @@ export const updateProduct = async (req: any, res: any) => {
     }
 };
 
-// ────────── DELETE ──────────
 export const deleteProduct = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -194,10 +194,12 @@ export const deleteProduct = async (req: any, res: any) => {
         const existing = await prisma.product.findFirst({ where: { id: productId, tenantId } });
         if (!existing) return res.status(404).json({ message: 'Product not found' });
 
-        const usedInStock = await prisma.stockMovement.count({ where: { productId } });
-        if (usedInStock > 0) {
+        // Check if product has any inventory items or stock movements
+        const itemCount = await prisma.inventoryItem.count({ where: { productId } });
+        const movementCount = await prisma.stockMovement.count({ where: { productId } });
+        if (itemCount > 0 || movementCount > 0) {
             return res.status(409).json({
-                message: 'Cannot delete product with existing stock movements. Consider archiving instead.',
+                message: 'Cannot delete product with existing stock. Consider archiving instead.',
             });
         }
 

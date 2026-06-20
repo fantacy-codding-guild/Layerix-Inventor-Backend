@@ -1,35 +1,31 @@
+// backend/src/validators/inventory.validator.ts
+// backend/src/validators/inventory.validator.ts
 import { z } from 'zod';
+import { ReferenceType } from '@prisma/client';
 
 export const stockInSchema = z.object({
     productId: z.number().int().positive(),
     quantity: z.number().int().positive(),
-    unitPrice: z.number().nonnegative().optional(),
+    unitPrice: z.number().positive().optional(),
     fromVendorId: z.number().int().positive().optional(),
-    projectId: z.number().int().positive().optional(),   // project for which we're buying
-    referenceType: z.enum(['PURCHASE_ORDER', 'MANUAL_ADJUSTMENT', 'RETURN']).optional(),
-    referenceId: z.number().int().positive().optional(),
-    notes: z.string().max(500).optional(),
+    projectId: z.number().int().positive().optional(),
+    referenceType: z.nativeEnum(ReferenceType).optional(),
+    referenceId: z.number().int().optional(),
+    notes: z.string().optional(),
 });
 
 export const stockOutSchema = z.object({
     productId: z.number().int().positive(),
     quantity: z.number().int().positive(),
-    unitPrice: z.number().nonnegative().optional(),       // cost or selling price
-    toProjectId: z.number().int().positive().optional(),   // issued to project
-    toCustomerId: z.number().int().positive().optional(),  // sold directly to customer
-    referenceType: z.enum(['PROJECT', 'MANUAL_ADJUSTMENT', 'RETURN']).optional(),
-    referenceId: z.number().int().positive().optional(),
-    notes: z.string().max(500).optional(),
-});
+    unitPrice: z.number().positive().optional(),
+    toProjectId: z.number().int().positive().optional(),
+    toCustomerId: z.number().int().positive().optional(),
+    referenceType: z.nativeEnum(ReferenceType).optional(),
+    referenceId: z.number().int().optional(),
+    notes: z.string().optional(),
 
-export const adjustmentSchema = z.object({
-    productId: z.number().int().positive(),
-    quantity: z.number().int(),
-    notes: z.string().max(500).optional(),
-});
-
-export const reservationSchema = z.object({
-    productId: z.number().int().positive(),
-    projectId: z.number().int().positive(),
-    quantity: z.number().int().positive(),
+    // Required to identify the inventory line
+    brand: z.string().min(1, 'Brand is required'),
+    unit: z.string().min(1, 'Unit is required'),
+    vendorId: z.number().int().positive().optional().nullable(),
 });

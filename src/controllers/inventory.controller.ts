@@ -1,83 +1,105 @@
-//backend\src\controllers\inventory.controller.ts
 import prisma from '../lib/prisma';
 import {
     stockInSchema,
     stockOutSchema,
 } from '../validators/inventory.validator';
+import { ReferenceType } from '@prisma/client';
 
-// ─── Helpers ──────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────
 const extractBrandFromNotes = (notes?: string): string | null => {
     if (!notes) return null;
     const match = notes.match(/Brand:\s*(.+)/);
     return match ? match[1].trim() : null;
 };
 
-// ─── Stock Overview ────────────────────────────────────────────────
+// ─── Stock Overview ──────────────────────────────────────
 export const getStockOverview = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
-        const { search, categoryId, brandId, lowStock, page = 1, limit = 20 } = req.query;
+        const { search, categoryId, brandId, page = 1, limit = 20 } = req.query;
         const skip = (Number(page) - 1) * Number(limit);
 
         const where: any = { tenantId };
 
         if (search) {
             where.OR = [
-                { name: { contains: search, mode: 'insensitive' } },
+                { product: { name: { contains: search, mode: 'insensitive' } } },
+                { product: { productCode: { contains: search, mode: 'insensitive' } } },
             ];
         }
-        if (categoryId) where.serviceCategoryId = Number(categoryId);
-        if (brandId) {
-            where.brands = { some: { brandId: Number(brandId) } };
+        if (brandId && brandId !== '0') {
+            const brand = await prisma.brand.findFirst({ where: { id: Number(brandId), tenantId } });
+            if (brand) where.brand = brand.name;
+        }
+        if (categoryId) {
+            where.product = { ...(where.product || {}), serviceCategoryId: Number(categoryId) };
         }
 
-        const [products, total] = await Promise.all([
-            prisma.product.findMany({
+        // All matching inventory items for totals
+        const allItems = await prisma.inventoryItem.findMany({
+            where,
+            include: {
+                product: { select: { id: true, name: true, productCode: true, minStockLevel: true, unit: true } },
+                vendor: { select: { id: true, name: true } },
+            },
+        });
+
+        const totalProducts = allItems.length;
+        const totalValue = allItems.reduce(
+            (sum, item) => sum + item.quantityOnHand * (Number(item.averageCost) || 0),
+            0
+        );
+        const totalUnits = allItems.reduce((sum, item) => sum + item.quantityOnHand, 0);
+        const lowStockCount = allItems.filter(item => {
+            const available = item.quantityOnHand - item.reservedQuantity;
+            return available < item.product.minStockLevel;
+        }).length;
+
+        // Paginated subset
+        const [paginated, total] = await Promise.all([
+            prisma.inventoryItem.findMany({
                 where,
                 include: {
-                    serviceCategory: { select: { id: true, name: true } },
-                    stock: true,
-                    brands: { include: { brand: { select: { id: true, name: true } } } },
+                    product: { select: { id: true, name: true, productCode: true, minStockLevel: true, unit: true } },
+                    vendor: { select: { id: true, name: true } },
                 },
-                orderBy: { name: 'asc' },
+                orderBy: { product: { name: 'asc' } },
                 skip,
                 take: Number(limit),
             }),
-            prisma.product.count({ where }),
+            prisma.inventoryItem.count({ where }),
         ]);
 
-        let data = products.map((p) => {
-            const onHand = p.stock?.quantityOnHand ?? 0;
-            const reserved = p.stock?.reservedQuantity ?? 0;
-            const available = onHand - reserved;
-            const brandNames = p.brands.map(pb => pb.brand.name).join(', ');
-            return {
-                id: p.id,
-                productCode: p.productCode,    // <-- ADD THIS
-                name: p.name,
-                unit: p.unit,                  // <-- ensure unit is returned (already present)
-                brand: brandNames || null,
-                category: p.serviceCategory?.name,
-                minStockLevel: p.minStockLevel,
-                currentStock: onHand,
-                reservedStock: reserved,
-                availableStock: available,
-                averageCost: p.stock?.averageCost,
-                isLowStock: available < p.minStockLevel,
-            };
-        });
-
-        if (lowStock === 'true') {
-            data = data.filter((item) => item.isLowStock);
-        }
+        const data = paginated.map(item => ({
+            id: item.id,
+            productId: item.productId,              // already added
+            name: item.product.name,
+            productCode: item.product.productCode,
+            brand: item.brand,
+            unit: item.unit,
+            vendor: item.vendor?.name || null,
+            vendorId: item.vendorId,               // ← ADD THIS LINE
+            minStockLevel: item.product.minStockLevel,
+            currentStock: item.quantityOnHand,
+            reservedStock: item.reservedQuantity,
+            availableStock: item.quantityOnHand - item.reservedQuantity,
+            averageCost: item.averageCost,
+            isLowStock: (item.quantityOnHand - item.reservedQuantity) < item.product.minStockLevel,
+        }));
 
         res.json({
             data,
             pagination: {
                 page: Number(page),
                 limit: Number(limit),
-                total: lowStock === 'true' ? data.length : total,
-                totalPages: Math.ceil((lowStock === 'true' ? data.length : total) / Number(limit)),
+                total,
+                totalPages: Math.ceil(total / Number(limit)),
+            },
+            totals: {
+                totalProducts,
+                totalValue,
+                totalUnits,
+                lowStockCount,
             },
         });
     } catch (error) {
@@ -86,7 +108,7 @@ export const getStockOverview = async (req: any, res: any) => {
     }
 };
 
-// ─── Stock In ───────────────────────────────────────────────────────
+// ─── Stock In (new pricing: latest price replaces old average) ────
 export const stockIn = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -98,14 +120,13 @@ export const stockIn = async (req: any, res: any) => {
         const { productId, quantity, unitPrice, fromVendorId, projectId, referenceType, referenceId, notes } =
             validation.data;
 
-        // ── Validate product ──
+        // Validate product
         const product = await prisma.product.findFirst({
             where: { id: productId, tenantId },
-            include: { stock: true },
         });
         if (!product) return res.status(404).json({ message: 'Product not found' });
 
-        // ── Validate vendor / project if provided ──
+        // Validate vendor / project if provided
         if (fromVendorId) {
             const vendor = await prisma.vendor.findFirst({ where: { id: fromVendorId, tenantId } });
             if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
@@ -115,52 +136,46 @@ export const stockIn = async (req: any, res: any) => {
             if (!project) return res.status(400).json({ message: 'Project not found' });
         }
 
-        // ── Brand linking ──
-        const brandName = extractBrandFromNotes(notes);
-        if (brandName) {
-            const brand = await prisma.brand.findFirst({
-                where: { tenantId, name: { equals: brandName, mode: 'insensitive' } },
-            });
-            if (brand) {
-                const existing = await prisma.productBrand.findUnique({
-                    where: { productId_brandId: { productId, brandId: brand.id } },
-                });
-                if (!existing) {
-                    await prisma.productBrand.create({
-                        data: { productId, brandId: brand.id },
-                    });
-                }
-            }
-        }
+        // Extract brand from notes (or use 'Unknown')
+        const brandName = extractBrandFromNotes(notes) || 'Unknown';
+        const unit = product.unit;
 
-        // ── Stock transaction ──
+        // Stock transaction – update or create the matching InventoryItem
         await prisma.$transaction(async (tx) => {
-            const currentStock = await tx.stock.upsert({
-                where: { productId },
-                update: {},
-                create: { productId, quantityOnHand: 0, reservedQuantity: 0 },
-            });
-
-            const newQty = currentStock.quantityOnHand + quantity;
-            let newAvgCost = currentStock.averageCost ? Number(currentStock.averageCost) : undefined;
-
-            if (unitPrice !== undefined) {
-                if (newAvgCost === undefined) {
-                    newAvgCost = unitPrice;
-                } else {
-                    const totalValue = currentStock.quantityOnHand * newAvgCost + quantity * unitPrice;
-                    newAvgCost = totalValue / newQty;
-                }
-            }
-
-            await tx.stock.update({
-                where: { productId },
-                data: {
-                    quantityOnHand: newQty,
-                    averageCost: newAvgCost !== undefined ? newAvgCost : undefined,
+            const existingItem = await tx.inventoryItem.findFirst({
+                where: {
+                    tenantId,
+                    productId,
+                    brand: brandName,
+                    unit,
+                    vendorId: fromVendorId || null,
                 },
             });
 
+            if (existingItem) {
+                // New pricing rule: set averageCost to the new unit price (no averaging)
+                await tx.inventoryItem.update({
+                    where: { id: existingItem.id },
+                    data: {
+                        quantityOnHand: existingItem.quantityOnHand + quantity,
+                        averageCost: unitPrice ?? existingItem.averageCost,   // overwrite with new price
+                    },
+                });
+            } else {
+                await tx.inventoryItem.create({
+                    data: {
+                        tenantId,
+                        productId,
+                        brand: brandName,
+                        unit,
+                        vendorId: fromVendorId || null,
+                        quantityOnHand: quantity,
+                        averageCost: unitPrice || null,
+                    },
+                });
+            }
+
+            // Record the stock movement
             await tx.stockMovement.create({
                 data: {
                     tenantId,
@@ -170,7 +185,7 @@ export const stockIn = async (req: any, res: any) => {
                     unitPrice,
                     fromVendorId: fromVendorId || null,
                     toProjectId: projectId || null,
-                    referenceType: referenceType || 'MANUAL_ADJUSTMENT',
+                    referenceType: referenceType ?? ReferenceType.MANUAL_ADJUSTMENT,
                     referenceId: referenceId || null,
                     date: new Date(),
                     notes,
@@ -197,78 +212,66 @@ export const stockIn = async (req: any, res: any) => {
     }
 };
 
-// ─── Stock Out ──────────────────────────────────────────────────────
 export const stockOut = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
         const validation = stockOutSchema.safeParse(req.body);
         if (!validation.success) {
-            return res.status(400).json({ message: 'Validation error', errors: validation.error.issues });
+            return res.status(400).json({
+                message: 'Validation error',
+                errors: validation.error.issues,
+            });
         }
 
-        const { productId, quantity, unitPrice, toProjectId, toCustomerId, referenceType, referenceId, notes } =
-            validation.data;
+        const {
+            productId, quantity, unitPrice,
+            toProjectId, toCustomerId,
+            referenceType, referenceId, notes,
+            brand, unit, vendorId,
+        } = validation.data;
 
+        // Trim brand and unit to avoid whitespace mismatches
+        const cleanBrand = brand.trim();
+        const cleanUnit = unit.trim();
+
+        console.log('🔍 Stock‑out search params:', {
+            tenantId,
+            productId,
+            brand: cleanBrand,
+            unit: cleanUnit,
+            vendorId,
+        });
+
+        // At least one destination if not manual adjustment
         if (!toProjectId && !toCustomerId && referenceType !== 'MANUAL_ADJUSTMENT') {
             return res.status(400).json({ message: 'Specify either toProjectId or toCustomerId' });
         }
 
-        const product = await prisma.product.findFirst({
-            where: { id: productId, tenantId },
-            include: { stock: true },
+        const inventoryItem = await prisma.inventoryItem.findFirst({
+            where: {
+                tenantId,
+                productId,
+                brand: cleanBrand,
+                unit: cleanUnit,
+                vendorId: vendorId || null,
+            },
         });
-        if (!product) return res.status(404).json({ message: 'Product not found' });
 
-        const onHand = product.stock?.quantityOnHand ?? 0;
-        const reserved = product.stock?.reservedQuantity ?? 0;
-        const available = onHand - reserved;
+        console.log('🔍 Found inventory item:', inventoryItem?.id ?? 'NOT FOUND');
+
+        if (!inventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
+
+        const available = inventoryItem.quantityOnHand - inventoryItem.reservedQuantity;
         if (available < quantity) {
             return res.status(400).json({ message: 'Insufficient available stock' });
         }
 
-        if (toProjectId) {
-            const project = await prisma.project.findFirst({ where: { id: toProjectId, tenantId } });
-            if (!project) return res.status(400).json({ message: 'Project not found' });
-        }
-        if (toCustomerId) {
-            const customer = await prisma.customer.findFirst({ where: { id: toCustomerId, tenantId } });
-            if (!customer) return res.status(400).json({ message: 'Customer not found' });
-        }
-
+        // Transaction
         await prisma.$transaction(async (tx) => {
-            // Decrease on-hand
-            await tx.stock.update({
-                where: { productId },
+            await tx.inventoryItem.update({
+                where: { id: inventoryItem.id },
                 data: { quantityOnHand: { decrement: quantity } },
             });
-
-            // Reservation handling
-            if (toProjectId) {
-                const reservation = await tx.stockReservation.findFirst({
-                    where: {
-                        productId,
-                        projectId: toProjectId,
-                        status: 'PENDING',
-                    },
-                    orderBy: { createdAt: 'asc' },
-                });
-
-                if (reservation) {
-                    const newReservedQty = Math.max(reservation.quantity - quantity, 0);
-                    const fulfilled = reservation.quantity - newReservedQty;
-                    await tx.stockReservation.update({
-                        where: { id: reservation.id },
-                        data: {
-                            quantity: newReservedQty,
-                            status: newReservedQty === 0 ? 'FULFILLED' : 'PENDING',
-                        },
-                    });
-                    await tx.stock.update({
-                        where: { productId },
-                        data: { reservedQuantity: { decrement: fulfilled } },
-                    });
-                }
-            }
 
             await tx.stockMovement.create({
                 data: {
@@ -279,7 +282,7 @@ export const stockOut = async (req: any, res: any) => {
                     unitPrice,
                     toProjectId: toProjectId || null,
                     toCustomerId: toCustomerId || null,
-                    referenceType: referenceType || 'PROJECT',
+                    referenceType: referenceType ?? ReferenceType.PROJECT,
                     referenceId: referenceId || null,
                     date: new Date(),
                     notes,
@@ -306,7 +309,7 @@ export const stockOut = async (req: any, res: any) => {
     }
 };
 
-// ─── Movements (List, Edit, Delete) ──────────────────────────────
+// ─── Movements (list, edit, delete) ──────────────────────
 export const getMovements = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -348,158 +351,3 @@ export const getMovements = async (req: any, res: any) => {
     }
 };
 
-export const updateMovement = async (req: any, res: any) => {
-    try {
-        const tenantId = req.user.tenantId;
-        const movementId = parseInt(req.params.id);
-        const { quantity, unitPrice, notes, fromVendorId, toProjectId, toCustomerId } = req.body;
-
-        const movement = await prisma.stockMovement.findFirst({
-            where: { id: movementId, tenantId },
-            include: { product: { include: { stock: true } } },
-        });
-        if (!movement) return res.status(404).json({ message: 'Movement not found' });
-
-        // Prevent editing if type is ADJUSTMENT (or we can allow but it's tricky)
-        // We'll allow editing STOCK_IN and STOCK_OUT only.
-        if (movement.type === 'ADJUSTMENT') {
-            return res.status(400).json({ message: 'Adjustment movements cannot be edited' });
-        }
-
-        // Build update data
-        const updateData: any = {};
-        let stockDelta = 0;
-
-        if (unitPrice !== undefined) {
-            updateData.unitPrice = unitPrice;
-        }
-        if (notes !== undefined) {
-            updateData.notes = notes;
-        }
-
-        // Handle quantity change – adjust stock balance
-        if (quantity !== undefined && quantity !== movement.quantity) {
-            const diff = quantity - movement.quantity;
-            // For STOCK_IN, increasing quantity adds to stock; decreasing subtracts
-            // For STOCK_OUT, increasing quantity subtracts more; decreasing adds back
-            if (movement.type === 'STOCK_IN') {
-                stockDelta = diff; // positive = add, negative = subtract
-            } else if (movement.type === 'STOCK_OUT') {
-                stockDelta = -diff; // positive = add back, negative = subtract more
-            }
-            updateData.quantity = quantity;
-        }
-
-        // Update references (fromVendorId / toProjectId / toCustomerId)
-        if (movement.type === 'STOCK_IN') {
-            if (fromVendorId !== undefined) {
-                updateData.fromVendorId = fromVendorId ? parseInt(fromVendorId) : null;
-            }
-        } else if (movement.type === 'STOCK_OUT') {
-            if (toProjectId !== undefined) {
-                updateData.toProjectId = toProjectId ? parseInt(toProjectId) : null;
-            }
-            if (toCustomerId !== undefined) {
-                updateData.toCustomerId = toCustomerId ? parseInt(toCustomerId) : null;
-            }
-        }
-
-        // Perform update and stock adjustment in transaction
-        await prisma.$transaction(async (tx) => {
-            // Update movement
-            await tx.stockMovement.update({
-                where: { id: movementId },
-                data: updateData,
-            });
-
-            // Adjust stock if quantity changed
-            if (stockDelta !== 0) {
-                const currentStock = movement.product.stock;
-                if (!currentStock) {
-                    // Should not happen, but create if missing
-                    await tx.stock.create({
-                        data: {
-                            productId: movement.productId,
-                            quantityOnHand: stockDelta > 0 ? stockDelta : 0,
-                            reservedQuantity: 0,
-                        },
-                    });
-                } else {
-                    const newOnHand = currentStock.quantityOnHand + stockDelta;
-                    if (newOnHand < 0) {
-                        throw new Error('Insufficient stock for quantity change');
-                    }
-                    await tx.stock.update({
-                        where: { productId: movement.productId },
-                        data: { quantityOnHand: newOnHand },
-                    });
-                }
-            }
-
-            // If unitPrice changed, we could optionally recalc average cost – not implemented for simplicity
-        });
-
-        res.json({ message: 'Movement updated successfully' });
-    } catch (error: any) {
-        console.error(error);
-        res.status(500).json({ message: error.message || 'Failed to update movement' });
-    }
-};
-
-export const deleteMovement = async (req: any, res: any) => {
-    try {
-        const tenantId = req.user.tenantId;
-        const movementId = parseInt(req.params.id);
-
-        const movement = await prisma.stockMovement.findFirst({
-            where: { id: movementId, tenantId },
-            include: { product: { include: { stock: true } } },
-        });
-        if (!movement) return res.status(404).json({ message: 'Movement not found' });
-
-        // Reverse the effect of this movement on stock
-        let stockDelta = 0;
-        if (movement.type === 'STOCK_IN') {
-            stockDelta = -movement.quantity; // remove the stock that was added
-        } else if (movement.type === 'STOCK_OUT') {
-            stockDelta = movement.quantity; // add back the stock that was removed
-        } else {
-            // For ADJUSTMENT, we need to reverse the effect – but let's decide not to allow deletion of adjustments
-            return res.status(400).json({ message: 'Cannot delete adjustment movements' });
-        }
-
-        await prisma.$transaction(async (tx) => {
-            // Delete the movement
-            await tx.stockMovement.delete({ where: { id: movementId } });
-
-            // Adjust stock
-            const currentStock = movement.product.stock;
-            if (currentStock) {
-                const newOnHand = currentStock.quantityOnHand + stockDelta;
-                if (newOnHand < 0) {
-                    throw new Error('Deleting this movement would result in negative stock');
-                }
-                await tx.stock.update({
-                    where: { productId: movement.productId },
-                    data: { quantityOnHand: newOnHand },
-                });
-            }
-        });
-
-        await prisma.activityLog.create({
-            data: {
-                tenantId,
-                userId: req.user.userId,
-                action: 'DELETE',
-                entityType: 'StockMovement',
-                entityId: movementId,
-                details: { type: movement.type, quantity: movement.quantity },
-            },
-        });
-
-        res.json({ message: 'Movement deleted and stock adjusted' });
-    } catch (error: any) {
-        console.error(error);
-        res.status(500).json({ message: error.message || 'Failed to delete movement' });
-    }
-};

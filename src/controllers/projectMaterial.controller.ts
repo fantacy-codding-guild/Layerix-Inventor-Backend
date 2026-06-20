@@ -1,8 +1,14 @@
-// backend/src/controllers/projectMaterial.controller.ts
 import prisma from '../lib/prisma';
 import { z } from 'zod';
 
-// ─── Validation schemas ────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────
+const extractBrandFromNotes = (notes?: string): string | null => {
+    if (!notes) return null;
+    const match = notes.match(/Brand:\s*(.+)/);
+    return match ? match[1].trim() : null;
+};
+
+// ─── Validation schemas ──────────────────────────────────
 const orderSchema = z.object({
     productId: z.number().int(),
     quantity: z.number().int().positive(),
@@ -23,7 +29,7 @@ const transferOutSchema = z.object({
     notes: z.string().optional(),
 });
 
-// ─── Order material for a project ─────────────────────────────
+// ─── Order material for a project (stock‑in with projectId) ──
 export const orderMaterial = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -39,45 +45,93 @@ export const orderMaterial = async (req: any, res: any) => {
 
         const { productId, quantity, unitPrice, fromVendorId, notes } = validation.data;
 
-        // Verify project exists and belongs to tenant
+        // Verify project, product and vendor
         const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        // Verify product
         const product = await prisma.product.findFirst({ where: { id: productId, tenantId } });
         if (!product) return res.status(400).json({ message: 'Product not found' });
 
-        // Verify vendor
         const vendor = await prisma.vendor.findFirst({ where: { id: fromVendorId, tenantId } });
         if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
 
-        // Get primary brand of product (or use first brand)
-        const productBrand = await prisma.productBrand.findFirst({ where: { productId } });
+        // Extract brand from notes (or use 'Unknown')
+        const brandName = extractBrandFromNotes(notes) || 'Unknown';
+        const unit = product.unit;   // use the product's default unit
 
-        const movement = await prisma.projectMaterialMovement.create({
+        // Stock transaction – update or create the matching InventoryItem
+        await prisma.$transaction(async (tx) => {
+            const existingItem = await tx.inventoryItem.findFirst({
+                where: {
+                    tenantId,
+                    productId,
+                    brand: brandName,
+                    unit,
+                    vendorId: fromVendorId || null,
+                },
+            });
+
+            if (existingItem) {
+                // Latest price rule: set averageCost to the new unit price (no averaging)
+                await tx.inventoryItem.update({
+                    where: { id: existingItem.id },
+                    data: {
+                        quantityOnHand: existingItem.quantityOnHand + quantity,
+                        averageCost: unitPrice ?? existingItem.averageCost,
+                    },
+                });
+            } else {
+                await tx.inventoryItem.create({
+                    data: {
+                        tenantId,
+                        productId,
+                        brand: brandName,
+                        unit,
+                        vendorId: fromVendorId || null,
+                        quantityOnHand: quantity,
+                        averageCost: unitPrice || null,
+                    },
+                });
+            }
+
+            // Record the stock movement (linked to the project)
+            await tx.stockMovement.create({
+                data: {
+                    tenantId,
+                    productId,
+                    type: 'STOCK_IN',
+                    quantity,
+                    unitPrice,
+                    fromVendorId,
+                    toProjectId: projectId,      // <-- link to the project
+                    referenceType: 'MANUAL_ADJUSTMENT',
+                    date: new Date(),
+                    notes,
+                    createdBy: req.user.userId,
+                },
+            });
+        });
+
+        // Activity log
+        await prisma.activityLog.create({
             data: {
                 tenantId,
-                projectId,
-                productId,
-                type: 'ORDER',
-                quantity,
-                unitPrice,
-                fromVendorId,
-                brandId: productBrand?.brandId ?? null,
-                notes,
-                date: new Date(),
-                createdBy: req.user.userId,
+                userId: req.user.userId,
+                action: 'ORDER',
+                entityType: 'Project',
+                entityId: projectId,
+                details: { productId, quantity, unitPrice, fromVendorId },
             },
         });
 
-        res.status(201).json(movement);
+        res.status(201).json({ message: 'Material ordered successfully' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to create order' });
     }
 };
 
-// ─── Consume material (from project stock) ────────────────────
+// ─── Consume material (stock‑out from project) ──────────────
 export const consumeMaterial = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -96,34 +150,71 @@ export const consumeMaterial = async (req: any, res: any) => {
         const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        const product = await prisma.product.findFirst({ where: { id: productId, tenantId } });
-        if (!product) return res.status(400).json({ message: 'Product not found' });
+        // We need to know which inventory item to consume – the frontend must provide brand/unit/vendor.
+        // For simplicity, we'll accept them from the request body (you may need to update the schema).
+        const { brand, unit, vendorId } = req.body as any;
+        if (!brand || !unit) {
+            return res.status(400).json({ message: 'Brand and unit are required to identify the stock line' });
+        }
 
-        // Optionally check if project has enough ordered materials (could compute balance)
-        const productBrand = await prisma.productBrand.findFirst({ where: { productId } });
-
-        const movement = await prisma.projectMaterialMovement.create({
-            data: {
+        const inventoryItem = await prisma.inventoryItem.findFirst({
+            where: {
                 tenantId,
-                projectId,
                 productId,
-                type: 'CONSUME',
-                quantity,
-                brandId: productBrand?.brandId ?? null,
-                notes,
-                date: new Date(),
-                createdBy: req.user.userId,
+                brand,
+                unit,
+                vendorId: vendorId || null,
             },
         });
 
-        res.status(201).json(movement);
+        if (!inventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
+
+        const available = inventoryItem.quantityOnHand - inventoryItem.reservedQuantity;
+        if (available < quantity) {
+            return res.status(400).json({ message: 'Insufficient available stock' });
+        }
+
+        // Transaction: decrement the inventory item and record the movement
+        await prisma.$transaction(async (tx) => {
+            await tx.inventoryItem.update({
+                where: { id: inventoryItem.id },
+                data: { quantityOnHand: { decrement: quantity } },
+            });
+
+            await tx.stockMovement.create({
+                data: {
+                    tenantId,
+                    productId,
+                    type: 'STOCK_OUT',
+                    quantity,
+                    toProjectId: projectId,
+                    referenceType: 'PROJECT',
+                    date: new Date(),
+                    notes,
+                    createdBy: req.user.userId,
+                },
+            });
+        });
+
+        await prisma.activityLog.create({
+            data: {
+                tenantId,
+                userId: req.user.userId,
+                action: 'CONSUME',
+                entityType: 'Project',
+                entityId: projectId,
+                details: { productId, quantity },
+            },
+        });
+
+        res.status(201).json({ message: 'Consumption recorded' });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to record consumption' });
     }
 };
 
-// ─── Transfer material back to office ─────────────────────────
+// ─── Transfer material back to office ───────────────────────
 export const transferOutMaterial = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -142,52 +233,94 @@ export const transferOutMaterial = async (req: any, res: any) => {
         const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        const product = await prisma.product.findFirst({ where: { id: productId, tenantId } });
-        if (!product) return res.status(400).json({ message: 'Product not found' });
+        // Similar to consume, we need brand/unit/vendor to know which item to transfer
+        const { brand, unit, vendorId } = req.body as any;
+        if (!brand || !unit) {
+            return res.status(400).json({ message: 'Brand and unit are required to identify the stock line' });
+        }
 
-        const productBrand = await prisma.productBrand.findFirst({ where: { productId } });
-
-        const movement = await prisma.projectMaterialMovement.create({
-            data: {
+        const inventoryItem = await prisma.inventoryItem.findFirst({
+            where: {
                 tenantId,
-                projectId,
                 productId,
-                type: 'TRANSFER_OUT',
-                quantity,
-                brandId: productBrand?.brandId ?? null,
-                notes,
-                date: new Date(),
-                createdBy: req.user.userId,
+                brand,
+                unit,
+                vendorId: vendorId || null,
             },
         });
 
-        // (Optional) also create a StockTransfer record in the main system
-        res.status(201).json(movement);
+        if (!inventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
+
+        const available = inventoryItem.quantityOnHand - inventoryItem.reservedQuantity;
+        if (available < quantity) {
+            return res.status(400).json({ message: 'Insufficient available stock' });
+        }
+
+        // Transaction: decrement the item and record a stock-out (to office = no toProjectId)
+        await prisma.$transaction(async (tx) => {
+            await tx.inventoryItem.update({
+                where: { id: inventoryItem.id },
+                data: { quantityOnHand: { decrement: quantity } },
+            });
+
+            await tx.stockMovement.create({
+                data: {
+                    tenantId,
+                    productId,
+                    type: 'STOCK_OUT',
+                    quantity,
+                    toProjectId: null,   // office
+                    referenceType: 'MANUAL_ADJUSTMENT',
+                    date: new Date(),
+                    notes: notes || 'Return to office',
+                    createdBy: req.user.userId,
+                },
+            });
+        });
+
+        res.status(201).json({ message: 'Return to office recorded' });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Failed to create transfer' });
+        res.status(500).json({ message: 'Failed to transfer out' });
     }
 };
 
-// ─── Get project material movements (for the Movements tab) ────
+// ─── Get project material movements (from StockMovement) ────
 export const getProjectMovements = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
         const projectId = parseInt(req.params.id);
 
-        const movements = await prisma.projectMaterialMovement.findMany({
-            where: { tenantId, projectId },
+        const movements = await prisma.stockMovement.findMany({
+            where: {
+                tenantId,
+                OR: [
+                    { toProjectId: projectId },
+                    { fromVendorId: null, toProjectId: projectId },
+                ],
+            },
             include: {
                 product: { select: { id: true, name: true, unit: true } },
                 fromVendor: { select: { id: true, name: true } },
-                brand: { select: { id: true, name: true } },
                 user: { select: { id: true, name: true } },
             },
             orderBy: { date: 'desc' },
             take: 50,
         });
 
-        res.json(movements);
+        const result = movements.map(m => ({
+            id: m.id,
+            type: m.type === 'STOCK_IN' ? 'ORDER' : m.type === 'STOCK_OUT' ? 'CONSUME' : m.type,
+            quantity: m.quantity,
+            unitPrice: m.unitPrice,
+            date: m.date,
+            notes: m.notes,
+            product: m.product,
+            fromVendor: m.fromVendor,
+            user: m.user,
+        }));
+
+        res.json(result);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to fetch movements' });
