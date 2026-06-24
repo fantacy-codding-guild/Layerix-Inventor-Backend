@@ -1,3 +1,4 @@
+// backend/src/controllers/projectMaterial.controller.ts
 import prisma from '../lib/prisma';
 import { z } from 'zod';
 
@@ -29,7 +30,7 @@ const transferOutSchema = z.object({
     notes: z.string().optional(),
 });
 
-// ─── Order material for a project (stock‑in with projectId) ──
+// ─── Order material for a project (add to project stock) ──
 export const orderMaterial = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -55,44 +56,13 @@ export const orderMaterial = async (req: any, res: any) => {
         const vendor = await prisma.vendor.findFirst({ where: { id: fromVendorId, tenantId } });
         if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
 
-        // Extract brand from notes (or use 'Unknown')
-        const brandName = extractBrandFromNotes(notes) || 'Unknown';
-        const unit = product.unit;   // use the product's default unit
-
-        // Stock transaction – update or create the matching InventoryItem
+        // Increase project stock (create if not exists)
         await prisma.$transaction(async (tx) => {
-            const existingItem = await tx.inventoryItem.findFirst({
-                where: {
-                    tenantId,
-                    productId,
-                    brand: brandName,
-                    unit,
-                    vendorId: fromVendorId || null,
-                },
+            await tx.projectStock.upsert({
+                where: { projectId_productId: { projectId, productId } },
+                update: { quantityOnSite: { increment: quantity } },
+                create: { projectId, productId, quantityOnSite: quantity },
             });
-
-            if (existingItem) {
-                // Latest price rule: set averageCost to the new unit price (no averaging)
-                await tx.inventoryItem.update({
-                    where: { id: existingItem.id },
-                    data: {
-                        quantityOnHand: existingItem.quantityOnHand + quantity,
-                        averageCost: unitPrice ?? existingItem.averageCost,
-                    },
-                });
-            } else {
-                await tx.inventoryItem.create({
-                    data: {
-                        tenantId,
-                        productId,
-                        brand: brandName,
-                        unit,
-                        vendorId: fromVendorId || null,
-                        quantityOnHand: quantity,
-                        averageCost: unitPrice || null,
-                    },
-                });
-            }
 
             // Record the stock movement (linked to the project)
             await tx.stockMovement.create({
@@ -103,7 +73,7 @@ export const orderMaterial = async (req: any, res: any) => {
                     quantity,
                     unitPrice,
                     fromVendorId,
-                    toProjectId: projectId,      // <-- link to the project
+                    toProjectId: projectId,
                     referenceType: 'MANUAL_ADJUSTMENT',
                     date: new Date(),
                     notes,
@@ -131,7 +101,7 @@ export const orderMaterial = async (req: any, res: any) => {
     }
 };
 
-// ─── Consume material (stock‑out from project) ──────────────
+// ─── Consume material (decrease project stock) ────────────
 export const consumeMaterial = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -150,35 +120,20 @@ export const consumeMaterial = async (req: any, res: any) => {
         const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        // We need to know which inventory item to consume – the frontend must provide brand/unit/vendor.
-        // For simplicity, we'll accept them from the request body (you may need to update the schema).
-        const { brand, unit, vendorId } = req.body as any;
-        if (!brand || !unit) {
-            return res.status(400).json({ message: 'Brand and unit are required to identify the stock line' });
-        }
-
-        const inventoryItem = await prisma.inventoryItem.findFirst({
-            where: {
-                tenantId,
-                productId,
-                brand,
-                unit,
-                vendorId: vendorId || null,
-            },
+        // Check project stock
+        const projectStock = await prisma.projectStock.findUnique({
+            where: { projectId_productId: { projectId, productId } },
         });
 
-        if (!inventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
-
-        const available = inventoryItem.quantityOnHand - inventoryItem.reservedQuantity;
-        if (available < quantity) {
-            return res.status(400).json({ message: 'Insufficient available stock' });
+        if (!projectStock || projectStock.quantityOnSite < quantity) {
+            return res.status(400).json({ message: 'Insufficient stock at project site' });
         }
 
-        // Transaction: decrement the inventory item and record the movement
+        // Decrease project stock and record movement
         await prisma.$transaction(async (tx) => {
-            await tx.inventoryItem.update({
-                where: { id: inventoryItem.id },
-                data: { quantityOnHand: { decrement: quantity } },
+            await tx.projectStock.update({
+                where: { projectId_productId: { projectId, productId } },
+                data: { quantityOnSite: { decrement: quantity } },
             });
 
             await tx.stockMovement.create({
@@ -214,7 +169,7 @@ export const consumeMaterial = async (req: any, res: any) => {
     }
 };
 
-// ─── Transfer material back to office ───────────────────────
+// ─── Transfer material back to office ─────────────────────
 export const transferOutMaterial = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -233,34 +188,19 @@ export const transferOutMaterial = async (req: any, res: any) => {
         const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        // Similar to consume, we need brand/unit/vendor to know which item to transfer
-        const { brand, unit, vendorId } = req.body as any;
-        if (!brand || !unit) {
-            return res.status(400).json({ message: 'Brand and unit are required to identify the stock line' });
-        }
-
-        const inventoryItem = await prisma.inventoryItem.findFirst({
-            where: {
-                tenantId,
-                productId,
-                brand,
-                unit,
-                vendorId: vendorId || null,
-            },
+        const projectStock = await prisma.projectStock.findUnique({
+            where: { projectId_productId: { projectId, productId } },
         });
 
-        if (!inventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
-
-        const available = inventoryItem.quantityOnHand - inventoryItem.reservedQuantity;
-        if (available < quantity) {
-            return res.status(400).json({ message: 'Insufficient available stock' });
+        if (!projectStock || projectStock.quantityOnSite < quantity) {
+            return res.status(400).json({ message: 'Insufficient stock at project site' });
         }
 
-        // Transaction: decrement the item and record a stock-out (to office = no toProjectId)
+        // Decrease project stock and record stock-out (to office)
         await prisma.$transaction(async (tx) => {
-            await tx.inventoryItem.update({
-                where: { id: inventoryItem.id },
-                data: { quantityOnHand: { decrement: quantity } },
+            await tx.projectStock.update({
+                where: { projectId_productId: { projectId, productId } },
+                data: { quantityOnSite: { decrement: quantity } },
             });
 
             await tx.stockMovement.create({
@@ -285,20 +225,14 @@ export const transferOutMaterial = async (req: any, res: any) => {
     }
 };
 
-// ─── Get project material movements (from StockMovement) ────
+// ─── Get project material movements (from StockMovement) ──
 export const getProjectMovements = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
         const projectId = parseInt(req.params.id);
 
         const movements = await prisma.stockMovement.findMany({
-            where: {
-                tenantId,
-                OR: [
-                    { toProjectId: projectId },
-                    { fromVendorId: null, toProjectId: projectId },
-                ],
-            },
+            where: { tenantId, toProjectId: projectId },
             include: {
                 product: { select: { id: true, name: true, unit: true } },
                 fromVendor: { select: { id: true, name: true } },
@@ -318,11 +252,52 @@ export const getProjectMovements = async (req: any, res: any) => {
             product: m.product,
             fromVendor: m.fromVendor,
             user: m.user,
+            brand: extractBrandFromNotes(m.notes) || null,
         }));
 
         res.json(result);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to fetch movements' });
+    }
+};
+
+// ─── Get project stock (for consume/return dropdowns) ─────
+export const getProjectStock = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const projectId = parseInt(req.params.id);
+
+        const stocks = await prisma.projectStock.findMany({
+            where: { projectId, quantityOnSite: { gt: 0 } },
+            include: {
+                product: { select: { id: true, name: true, unit: true } },
+            },
+        });
+
+        // Attach brand from the latest order movement for each product
+        const result = stocks.map(s => ({
+            productId: s.productId,
+            name: s.product.name,
+            unit: s.product.unit,
+            quantityOnSite: s.quantityOnSite,
+            brand: null as string | null,
+        }));
+
+        for (const item of result) {
+            const movement = await prisma.stockMovement.findFirst({
+                where: { toProjectId: projectId, productId: item.productId, type: 'STOCK_IN' },
+                orderBy: { date: 'desc' },
+                select: { notes: true },
+            });
+            if (movement) {
+                item.brand = extractBrandFromNotes(movement.notes);
+            }
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to fetch project stock' });
     }
 };

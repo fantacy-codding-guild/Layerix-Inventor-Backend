@@ -13,6 +13,7 @@ import {
     consumeMaterial,
     transferOutMaterial,
     getProjectMovements,
+    getProjectStock,
 } from '../controllers/projectMaterial.controller';
 
 const router = Router();
@@ -30,5 +31,6 @@ router.get('/:id/movements', getProjectMovements);
 router.post('/:id/order', requireWriteAccess, orderMaterial);
 router.post('/:id/consume', requireWriteAccess, consumeMaterial);
 router.post('/:id/transfer-out', requireWriteAccess, transferOutMaterial);
+router.get('/:id/project-stock', getProjectStock);
 
 export default router;
