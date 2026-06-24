@@ -351,3 +351,114 @@ export const getMovements = async (req: any, res: any) => {
     }
 };
 
+export const updateMovement = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const movementId = parseInt(req.params.id);
+        const { quantity, unitPrice, notes, fromVendorId, toProjectId, toCustomerId } = req.body;
+
+        const movement = await prisma.stockMovement.findFirst({
+            where: { id: movementId, tenantId },
+            include: { product: { include: { inventoryItems: true } } },
+        });
+        if (!movement) return res.status(404).json({ message: 'Movement not found' });
+
+        if (movement.type === 'ADJUSTMENT') {
+            return res.status(400).json({ message: 'Adjustment movements cannot be edited' });
+        }
+
+        const updateData: any = {};
+        let stockDelta = 0;
+
+        if (unitPrice !== undefined) updateData.unitPrice = unitPrice;
+        if (notes !== undefined) updateData.notes = notes;
+
+        if (quantity !== undefined && quantity !== movement.quantity) {
+            const diff = quantity - movement.quantity;
+            stockDelta = movement.type === 'STOCK_IN' ? diff : -diff;
+            updateData.quantity = quantity;
+        }
+
+        if (movement.type === 'STOCK_IN' && fromVendorId !== undefined) {
+            updateData.fromVendorId = fromVendorId ? parseInt(fromVendorId) : null;
+        }
+        if (movement.type === 'STOCK_OUT') {
+            if (toProjectId !== undefined) updateData.toProjectId = toProjectId ? parseInt(toProjectId) : null;
+            if (toCustomerId !== undefined) updateData.toCustomerId = toCustomerId ? parseInt(toCustomerId) : null;
+        }
+
+        await prisma.$transaction(async (tx) => {
+            await tx.stockMovement.update({ where: { id: movementId }, data: updateData });
+
+            if (stockDelta !== 0) {
+                const item = await tx.inventoryItem.findFirst({
+                    where: { tenantId, productId: movement.productId },
+                });
+                if (item) {
+                    const newOnHand = item.quantityOnHand + stockDelta;
+                    if (newOnHand < 0) throw new Error('Insufficient stock for quantity change');
+                    await tx.inventoryItem.update({
+                        where: { id: item.id },
+                        data: { quantityOnHand: newOnHand },
+                    });
+                }
+            }
+        });
+
+        res.json({ message: 'Movement updated successfully' });
+    } catch (error: any) {
+        console.error(error);
+        res.status(500).json({ message: error.message || 'Failed to update movement' });
+    }
+};
+
+export const deleteMovement = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const movementId = parseInt(req.params.id);
+
+        const movement = await prisma.stockMovement.findFirst({
+            where: { id: movementId, tenantId },
+            include: { product: { include: { inventoryItems: true } } },
+        });
+        if (!movement) return res.status(404).json({ message: 'Movement not found' });
+
+        if (movement.type === 'ADJUSTMENT') {
+            return res.status(400).json({ message: 'Cannot delete adjustment movements' });
+        }
+
+        const stockDelta = movement.type === 'STOCK_IN' ? -movement.quantity : movement.quantity;
+
+        await prisma.$transaction(async (tx) => {
+            await tx.stockMovement.delete({ where: { id: movementId } });
+
+            const item = await tx.inventoryItem.findFirst({
+                where: { tenantId, productId: movement.productId },
+            });
+            if (item) {
+                const newOnHand = item.quantityOnHand + stockDelta;
+                if (newOnHand < 0) throw new Error('Deleting this movement would result in negative stock');
+                await tx.inventoryItem.update({
+                    where: { id: item.id },
+                    data: { quantityOnHand: newOnHand },
+                });
+            }
+        });
+
+        await prisma.activityLog.create({
+            data: {
+                tenantId,
+                userId: req.user.userId,
+                action: 'DELETE',
+                entityType: 'StockMovement',
+                entityId: movementId,
+                details: { type: movement.type, quantity: movement.quantity },
+            },
+        });
+
+        res.json({ message: 'Movement deleted and stock adjusted' });
+    } catch (error: any) {
+        console.error(error);
+        res.status(500).json({ message: error.message || 'Failed to delete movement' });
+    }
+};

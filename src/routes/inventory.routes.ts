@@ -6,6 +6,9 @@ import {
     stockIn,
     stockOut,
     getMovements,
+    updateMovement,
+    deleteMovement,
+
 
 } from '../controllers/inventory.controller';
 
@@ -16,5 +19,7 @@ router.get('/stock-overview', getStockOverview);
 router.post('/stock-in', requireWriteAccess, stockIn);
 router.post('/stock-out', requireWriteAccess, stockOut);
 router.get('/movements', getMovements);
+router.put('/movements/:id', requireWriteAccess, updateMovement);
+router.delete('/movements/:id', requireWriteAccess, deleteMovement);
 
 export default router;
