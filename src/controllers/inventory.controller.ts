@@ -8,7 +8,7 @@ import { ReferenceType } from '@prisma/client';
 // ─── Helpers ─────────────────────────────────────────────
 const extractBrandFromNotes = (notes?: string): string | null => {
     if (!notes) return null;
-    const match = notes.match(/Brand:\s*(.+)/);
+    const match = notes.match(/Brand:\s*([^\n]+)/);   // stops at newline
     return match ? match[1].trim() : null;
 };
 
@@ -120,13 +120,11 @@ export const stockIn = async (req: any, res: any) => {
         const { productId, quantity, unitPrice, fromVendorId, projectId, referenceType, referenceId, notes } =
             validation.data;
 
-        // Validate product
         const product = await prisma.product.findFirst({
             where: { id: productId, tenantId },
         });
         if (!product) return res.status(404).json({ message: 'Product not found' });
 
-        // Validate vendor / project if provided
         if (fromVendorId) {
             const vendor = await prisma.vendor.findFirst({ where: { id: fromVendorId, tenantId } });
             if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
@@ -136,29 +134,29 @@ export const stockIn = async (req: any, res: any) => {
             if (!project) return res.status(400).json({ message: 'Project not found' });
         }
 
-        // Extract brand from notes (or use 'Unknown')
+        // Improved brand extraction – stops at newline
         const brandName = extractBrandFromNotes(notes) || 'Unknown';
         const unit = product.unit;
 
-        // Stock transaction – update or create the matching InventoryItem
         await prisma.$transaction(async (tx) => {
             const existingItem = await tx.inventoryItem.findFirst({
                 where: {
                     tenantId,
                     productId,
-                    brand: brandName,
+                    // No longer filter by exact brand match – we'll fix it below
                     unit,
                     vendorId: fromVendorId || null,
                 },
             });
 
             if (existingItem) {
-                // New pricing rule: set averageCost to the new unit price (no averaging)
+                // Update quantity, price, AND correct the brand to the cleaned name
                 await tx.inventoryItem.update({
                     where: { id: existingItem.id },
                     data: {
+                        brand: brandName,                              // 🡸 cleans old malformed brand
                         quantityOnHand: existingItem.quantityOnHand + quantity,
-                        averageCost: unitPrice ?? existingItem.averageCost,   // overwrite with new price
+                        averageCost: unitPrice ?? existingItem.averageCost,
                     },
                 });
             } else {
@@ -175,7 +173,6 @@ export const stockIn = async (req: any, res: any) => {
                 });
             }
 
-            // Record the stock movement
             await tx.stockMovement.create({
                 data: {
                     tenantId,
@@ -390,6 +387,7 @@ export const updateMovement = async (req: any, res: any) => {
         await prisma.$transaction(async (tx) => {
             await tx.stockMovement.update({ where: { id: movementId }, data: updateData });
 
+            // Adjust inventory item quantity
             if (stockDelta !== 0) {
                 const item = await tx.inventoryItem.findFirst({
                     where: { tenantId, productId: movement.productId },
@@ -400,6 +398,19 @@ export const updateMovement = async (req: any, res: any) => {
                     await tx.inventoryItem.update({
                         where: { id: item.id },
                         data: { quantityOnHand: newOnHand },
+                    });
+                }
+            }
+
+            // Update inventory item average cost if unit price changed (only for STOCK_IN)
+            if (movement.type === 'STOCK_IN' && unitPrice !== undefined) {
+                const item = await tx.inventoryItem.findFirst({
+                    where: { tenantId, productId: movement.productId },
+                });
+                if (item) {
+                    await tx.inventoryItem.update({
+                        where: { id: item.id },
+                        data: { averageCost: unitPrice },
                     });
                 }
             }
