@@ -64,24 +64,12 @@ export const getProduct = async (req: any, res: any) => {
     try {
         const product = await prisma.product.findFirst({
             where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
-            include: {
-                vendorProducts: {
-                    include: {
-                        vendor: {
-                            select: { id: true, name: true, companyName: true, phone: true, email: true },
-                        },
-                    },
-                },
-                projectStocks: {
-                    include: {
-                        project: { select: { id: true, name: true } },
-                    },
-                },
-                // No stock include – stock is now separate
-            },
+            // No includes – only the product's own fields (name, unit, description, etc.)
         });
+
         if (!product) return res.status(404).json({ message: 'Product not found' });
 
+        // Return exactly what the frontend expects for editing
         res.json(product);
     } catch (error) {
         console.error(error);
