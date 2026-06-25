@@ -58,12 +58,12 @@ export const inventorySummary = async (req: any, res: any) => {
         // Top 3 by value
         const topByValue = [...enriched]
             .sort((a, b) => b.totalValue - a.totalValue)
-            .slice(0, 3);
+            .slice(0, 5);
 
         // Top 3 by quantity
         const topByQty = [...enriched]
             .sort((a, b) => b.quantityOnHand - a.quantityOnHand)
-            .slice(0, 3);
+            .slice(0, 5);
 
         res.json({
             totalValue,
