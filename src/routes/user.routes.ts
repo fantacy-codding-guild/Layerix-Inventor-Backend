@@ -1,3 +1,4 @@
+//backend\src\routes\user.routes.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import { adminOnly } from '../middleware/adminOnly';

@@ -1,3 +1,4 @@
+//backend\src\routes\dashboard.routes.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import { inventorySummary } from '../controllers/dashboard.controller';

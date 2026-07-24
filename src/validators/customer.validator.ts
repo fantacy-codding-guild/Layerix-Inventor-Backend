@@ -1,3 +1,4 @@
+//backend\src\validators\customer.validator.ts
 import { z } from 'zod';
 
 export const customerSchema = z.object({

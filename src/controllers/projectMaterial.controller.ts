@@ -1,11 +1,17 @@
-// backend/src/controllers/projectMaterial.controller.ts
 import prisma from '../lib/prisma';
 import { z } from 'zod';
+import { ReferenceType } from '@prisma/client';   // ✅ import for enum
 
 // ─── Helpers ─────────────────────────────────────────────
 const extractBrandFromNotes = (notes?: string): string | null => {
     if (!notes) return null;
-    const match = notes.match(/Brand:\s*(.+)/);
+    const match = notes.match(/Brand:\s*([^\n]+)/);
+    return match ? match[1].trim() : null;
+};
+
+const extractUnitFromNotes = (notes?: string): string | null => {
+    if (!notes) return null;
+    const match = notes.match(/Unit:\s*([^\n]+)/);
     return match ? match[1].trim() : null;
 };
 
@@ -15,6 +21,7 @@ const orderSchema = z.object({
     quantity: z.number().int().positive(),
     unitPrice: z.number().positive(),
     fromVendorId: z.number().int().positive(),
+    unit: z.string().optional(),
     notes: z.string().optional(),
 });
 
@@ -44,9 +51,8 @@ export const orderMaterial = async (req: any, res: any) => {
             });
         }
 
-        const { productId, quantity, unitPrice, fromVendorId, notes } = validation.data;
+        const { productId, quantity, unitPrice, fromVendorId, unit, notes } = validation.data;
 
-        // Verify project, product and vendor
         const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
@@ -56,7 +62,8 @@ export const orderMaterial = async (req: any, res: any) => {
         const vendor = await prisma.vendor.findFirst({ where: { id: fromVendorId, tenantId } });
         if (!vendor) return res.status(400).json({ message: 'Vendor not found' });
 
-        // Increase project stock (create if not exists)
+        const itemUnit = unit || product.unit;
+
         await prisma.$transaction(async (tx) => {
             await tx.projectStock.upsert({
                 where: { projectId_productId: { projectId, productId } },
@@ -64,7 +71,6 @@ export const orderMaterial = async (req: any, res: any) => {
                 create: { projectId, productId, quantityOnSite: quantity },
             });
 
-            // Record the stock movement (linked to the project)
             await tx.stockMovement.create({
                 data: {
                     tenantId,
@@ -74,7 +80,7 @@ export const orderMaterial = async (req: any, res: any) => {
                     unitPrice,
                     fromVendorId,
                     toProjectId: projectId,
-                    referenceType: 'MANUAL_ADJUSTMENT',
+                    referenceType: ReferenceType.PROJECT_ORDER,   // ✅ updated
                     date: new Date(),
                     notes,
                     createdBy: req.user.userId,
@@ -82,7 +88,6 @@ export const orderMaterial = async (req: any, res: any) => {
             });
         });
 
-        // Activity log
         await prisma.activityLog.create({
             data: {
                 tenantId,
@@ -120,7 +125,6 @@ export const consumeMaterial = async (req: any, res: any) => {
         const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
         if (!project) return res.status(404).json({ message: 'Project not found' });
 
-        // Check project stock
         const projectStock = await prisma.projectStock.findUnique({
             where: { projectId_productId: { projectId, productId } },
         });
@@ -129,7 +133,6 @@ export const consumeMaterial = async (req: any, res: any) => {
             return res.status(400).json({ message: 'Insufficient stock at project site' });
         }
 
-        // Decrease project stock and record movement
         await prisma.$transaction(async (tx) => {
             await tx.projectStock.update({
                 where: { projectId_productId: { projectId, productId } },
@@ -143,7 +146,7 @@ export const consumeMaterial = async (req: any, res: any) => {
                     type: 'STOCK_OUT',
                     quantity,
                     toProjectId: projectId,
-                    referenceType: 'PROJECT',
+                    referenceType: ReferenceType.PROJECT_CONSUME,   // ✅ updated
                     date: new Date(),
                     notes,
                     createdBy: req.user.userId,
@@ -196,7 +199,6 @@ export const transferOutMaterial = async (req: any, res: any) => {
             return res.status(400).json({ message: 'Insufficient stock at project site' });
         }
 
-        // Decrease project stock and record stock-out (to office)
         await prisma.$transaction(async (tx) => {
             await tx.projectStock.update({
                 where: { projectId_productId: { projectId, productId } },
@@ -210,7 +212,7 @@ export const transferOutMaterial = async (req: any, res: any) => {
                     type: 'STOCK_OUT',
                     quantity,
                     toProjectId: null,   // office
-                    referenceType: 'MANUAL_ADJUSTMENT',
+                    referenceType: ReferenceType.PROJECT_RETURN,   // ✅ updated
                     date: new Date(),
                     notes: notes || 'Return to office',
                     createdBy: req.user.userId,
@@ -275,7 +277,6 @@ export const getProjectStock = async (req: any, res: any) => {
             },
         });
 
-        // Attach brand from the latest order movement for each product
         const result = stocks.map(s => ({
             productId: s.productId,
             name: s.product.name,
@@ -292,6 +293,10 @@ export const getProjectStock = async (req: any, res: any) => {
             });
             if (movement) {
                 item.brand = extractBrandFromNotes(movement.notes);
+                const orderUnit = extractUnitFromNotes(movement.notes);
+                if (orderUnit) {
+                    item.unit = orderUnit;
+                }
             }
         }
 

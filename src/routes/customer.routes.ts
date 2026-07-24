@@ -1,3 +1,4 @@
+//C:\Users\Naveen\Desktop\layerixnetworks\Layerix-Inventry\backend\src\routes\customer.routes.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import {

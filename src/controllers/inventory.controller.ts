@@ -8,7 +8,7 @@ import { ReferenceType } from '@prisma/client';
 // ─── Helpers ─────────────────────────────────────────────
 const extractBrandFromNotes = (notes?: string): string | null => {
     if (!notes) return null;
-    const match = notes.match(/Brand:\s*([^\n]+)/);   // stops at newline
+    const match = notes.match(/Brand:\s*([^\n]+)/);
     return match ? match[1].trim() : null;
 };
 
@@ -35,7 +35,6 @@ export const getStockOverview = async (req: any, res: any) => {
             where.product = { ...(where.product || {}), serviceCategoryId: Number(categoryId) };
         }
 
-        // All matching inventory items for totals
         const allItems = await prisma.inventoryItem.findMany({
             where,
             include: {
@@ -55,7 +54,6 @@ export const getStockOverview = async (req: any, res: any) => {
             return available < item.product.minStockLevel;
         }).length;
 
-        // Paginated subset
         const [paginated, total] = await Promise.all([
             prisma.inventoryItem.findMany({
                 where,
@@ -72,13 +70,13 @@ export const getStockOverview = async (req: any, res: any) => {
 
         const data = paginated.map(item => ({
             id: item.id,
-            productId: item.productId,              // already added
+            productId: item.productId,
             name: item.product.name,
             productCode: item.product.productCode,
             brand: item.brand,
             unit: item.unit,
             vendor: item.vendor?.name || null,
-            vendorId: item.vendorId,               // ← ADD THIS LINE
+            vendorId: item.vendorId,
             minStockLevel: item.product.minStockLevel,
             currentStock: item.quantityOnHand,
             reservedStock: item.reservedQuantity,
@@ -108,7 +106,7 @@ export const getStockOverview = async (req: any, res: any) => {
     }
 };
 
-// ─── Stock In (new pricing: latest price replaces old average) ────
+// ─── Stock In ─────────────────────────────────────────────
 export const stockIn = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -134,7 +132,6 @@ export const stockIn = async (req: any, res: any) => {
             if (!project) return res.status(400).json({ message: 'Project not found' });
         }
 
-        // Improved brand extraction – stops at newline
         const brandName = extractBrandFromNotes(notes) || 'Unknown';
         const unit = product.unit;
 
@@ -143,18 +140,16 @@ export const stockIn = async (req: any, res: any) => {
                 where: {
                     tenantId,
                     productId,
-                    // No longer filter by exact brand match – we'll fix it below
                     unit,
                     vendorId: fromVendorId || null,
                 },
             });
 
             if (existingItem) {
-                // Update quantity, price, AND correct the brand to the cleaned name
                 await tx.inventoryItem.update({
                     where: { id: existingItem.id },
                     data: {
-                        brand: brandName,                              // 🡸 cleans old malformed brand
+                        brand: brandName,
                         quantityOnHand: existingItem.quantityOnHand + quantity,
                         averageCost: unitPrice ?? existingItem.averageCost,
                     },
@@ -173,6 +168,11 @@ export const stockIn = async (req: any, res: any) => {
                 });
             }
 
+            // Determine reference type: if fromVendorId is present, it's a purchase order
+            const refType = fromVendorId
+                ? (referenceType ?? ReferenceType.PURCHASE_ORDER)
+                : (referenceType ?? ReferenceType.MANUAL_ADJUSTMENT);
+
             await tx.stockMovement.create({
                 data: {
                     tenantId,
@@ -182,7 +182,7 @@ export const stockIn = async (req: any, res: any) => {
                     unitPrice,
                     fromVendorId: fromVendorId || null,
                     toProjectId: projectId || null,
-                    referenceType: referenceType ?? ReferenceType.MANUAL_ADJUSTMENT,
+                    referenceType: refType,
                     referenceId: referenceId || null,
                     date: new Date(),
                     notes,
@@ -209,6 +209,7 @@ export const stockIn = async (req: any, res: any) => {
     }
 };
 
+// ─── Stock Out ────────────────────────────────────────────
 export const stockOut = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -227,19 +228,9 @@ export const stockOut = async (req: any, res: any) => {
             brand, unit, vendorId,
         } = validation.data;
 
-        // Trim brand and unit to avoid whitespace mismatches
         const cleanBrand = brand.trim();
         const cleanUnit = unit.trim();
 
-        console.log('🔍 Stock‑out search params:', {
-            tenantId,
-            productId,
-            brand: cleanBrand,
-            unit: cleanUnit,
-            vendorId,
-        });
-
-        // At least one destination if not manual adjustment
         if (!toProjectId && !toCustomerId && referenceType !== 'MANUAL_ADJUSTMENT') {
             return res.status(400).json({ message: 'Specify either toProjectId or toCustomerId' });
         }
@@ -254,8 +245,6 @@ export const stockOut = async (req: any, res: any) => {
             },
         });
 
-        console.log('🔍 Found inventory item:', inventoryItem?.id ?? 'NOT FOUND');
-
         if (!inventoryItem) return res.status(404).json({ message: 'Inventory item not found' });
 
         const available = inventoryItem.quantityOnHand - inventoryItem.reservedQuantity;
@@ -263,12 +252,26 @@ export const stockOut = async (req: any, res: any) => {
             return res.status(400).json({ message: 'Insufficient available stock' });
         }
 
-        // Transaction
         await prisma.$transaction(async (tx) => {
             await tx.inventoryItem.update({
                 where: { id: inventoryItem.id },
                 data: { quantityOnHand: { decrement: quantity } },
             });
+
+            // Determine reference type:
+            // - If toCustomerId is set, it's an OFFICE_ISSUE (sale or transfer to customer)
+            // - If toProjectId is set, it's also OFFICE_ISSUE (office stock leaves to project)
+            // - Otherwise, fallback to MANUAL_ADJUSTMENT
+            let refType = referenceType;
+            if (!refType) {
+                if (toCustomerId) {
+                    refType = ReferenceType.OFFICE_ISSUE;
+                } else if (toProjectId) {
+                    refType = ReferenceType.OFFICE_ISSUE;
+                } else {
+                    refType = ReferenceType.MANUAL_ADJUSTMENT;
+                }
+            }
 
             await tx.stockMovement.create({
                 data: {
@@ -279,7 +282,7 @@ export const stockOut = async (req: any, res: any) => {
                     unitPrice,
                     toProjectId: toProjectId || null,
                     toCustomerId: toCustomerId || null,
-                    referenceType: referenceType ?? ReferenceType.PROJECT,
+                    referenceType: refType,
                     referenceId: referenceId || null,
                     date: new Date(),
                     notes,
@@ -310,11 +313,22 @@ export const stockOut = async (req: any, res: any) => {
 export const getMovements = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
-        const { productId, type, page = 1, limit = 20 } = req.query;
+        const { productId, type, page = 1, limit = 20, scope } = req.query;
         const where: any = { tenantId };
 
         if (productId && productId !== '0') where.productId = Number(productId);
         if (type && type !== '0') where.type = type.toUpperCase();
+
+        // 🔥 If scope is 'office', exclude project‑only reference types
+        if (scope === 'office') {
+            where.referenceType = {
+                notIn: [
+                    'PROJECT_ORDER',
+                    'PROJECT_CONSUME',
+                    'PROJECT_RETURN',
+                ],
+            };
+        }
 
         const [movements, total] = await Promise.all([
             prisma.stockMovement.findMany({
@@ -387,7 +401,6 @@ export const updateMovement = async (req: any, res: any) => {
         await prisma.$transaction(async (tx) => {
             await tx.stockMovement.update({ where: { id: movementId }, data: updateData });
 
-            // Adjust inventory item quantity
             if (stockDelta !== 0) {
                 const item = await tx.inventoryItem.findFirst({
                     where: { tenantId, productId: movement.productId },
@@ -402,7 +415,6 @@ export const updateMovement = async (req: any, res: any) => {
                 }
             }
 
-            // Update inventory item average cost if unit price changed (only for STOCK_IN)
             if (movement.type === 'STOCK_IN' && unitPrice !== undefined) {
                 const item = await tx.inventoryItem.findFirst({
                     where: { tenantId, productId: movement.productId },

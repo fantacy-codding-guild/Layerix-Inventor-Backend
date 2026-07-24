@@ -1,3 +1,4 @@
+//backend\src\controllers\project.controller.ts
 import prisma from '../lib/prisma';
 import { z } from 'zod';
 

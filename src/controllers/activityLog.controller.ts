@@ -1,3 +1,4 @@
+//backend\src\controllers\activityLog.controller.ts
 import prisma from '../lib/prisma';
 
 // GET /api/activity-logs

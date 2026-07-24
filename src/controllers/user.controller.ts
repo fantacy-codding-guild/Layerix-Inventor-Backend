@@ -1,4 +1,4 @@
-//backend\src\controllers\user.controller.ts
+// backend\src\controllers\user.controller.ts
 import prisma from '../lib/prisma';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';

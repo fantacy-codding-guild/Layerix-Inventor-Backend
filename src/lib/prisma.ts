@@ -1,3 +1,4 @@
+//backend\src\lib\prisma.ts
 import 'dotenv/config';   // <-- add this
 
 import { PrismaClient } from '@prisma/client';

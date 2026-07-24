@@ -1,3 +1,4 @@
+//backend\src\controllers\customer.controller.ts
 import prisma from '../lib/prisma';
 import { customerSchema } from '../validators/customer.validator';
 

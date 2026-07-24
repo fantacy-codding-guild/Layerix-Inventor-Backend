@@ -36,12 +36,8 @@ model Tenant {
   states            State[]
   activityLogs      ActivityLog[]
   stockMovements    StockMovement[]
-
-  inventoryItems     InventoryItem[]
-
+  inventoryItems    InventoryItem[]
 }
-
-
 
 // --------------------------------------------------------
 // USER
@@ -166,7 +162,6 @@ model Product {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
- 
   vendorProducts VendorProduct[]
   projectStocks  ProjectStock[]
   stockMovements StockMovement[]
@@ -174,17 +169,8 @@ model Product {
   @@unique([tenantId, productCode])
   @@index([tenantId, name])
 
-  inventoryItems     InventoryItem[]
+  inventoryItems InventoryItem[]
 }
-
-// model Stock {
-//  productId        Int      @id
-//  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-//  quantityOnHand   Int      @default(0)
-//  reservedQuantity Int      @default(0)
-//  averageCost      Decimal? @db.Decimal(10,2)
-//  updatedAt        DateTime @updatedAt
-// }
 
 // --------------------------------------------------------
 // VENDORS & CUSTOMERS
@@ -204,7 +190,7 @@ model Vendor {
   contacts       VendorContact[]
   stockMovements StockMovement[] @relation("FromVendor")
 
-  inventoryItems  InventoryItem[]   @relation("VendorInventoryItems")
+  inventoryItems InventoryItem[] @relation("VendorInventoryItems")
 
   @@index([tenantId, name])
 }
@@ -347,6 +333,10 @@ enum ReferenceType {
   PROJECT
   MANUAL_ADJUSTMENT
   RETURN
+  PROJECT_ORDER      // material ordered directly for a project (project stock +)
+  PROJECT_CONSUME    // material consumed at project site (project stock –)
+  PROJECT_RETURN     // material returned to office (project stock –)
+  OFFICE_ISSUE       // office stock‑out (to customer, project, or write‑off)
 }
 
 model StockMovement {

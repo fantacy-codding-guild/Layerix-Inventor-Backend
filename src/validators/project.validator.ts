@@ -1,7 +1,5 @@
+//backend\src\validators\project.validator.ts
 import { z } from 'zod';
-
-
-
 export const milestoneSchema = z.object({
     name: z.string().min(1).max(200),
     description: z.string().max(1000).optional(),

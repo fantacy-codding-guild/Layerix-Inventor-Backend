@@ -1,3 +1,4 @@
+//backend\src\routes\project.routes.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import { requireWriteAccess } from '../middleware/requireWriteAccess';

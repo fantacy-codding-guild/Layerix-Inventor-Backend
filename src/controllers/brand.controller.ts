@@ -1,3 +1,4 @@
+//backend\src\controllers\brand.controller.ts
 import prisma from '../lib/prisma';
 import { brandSchema } from '../validators/brand.validator';
 
@@ -13,6 +14,7 @@ export const getBrands = async (req: any, res: any) => {
         res.status(500).json({ message: 'Failed to fetch brands' });
     }
 };
+
 
 export const createBrand = async (req: any, res: any) => {
     try {

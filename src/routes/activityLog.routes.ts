@@ -1,3 +1,4 @@
+//backend\src\routes\activityLog.routes.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import { adminOnly } from '../middleware/adminOnly';   // optional – only admins can view logs

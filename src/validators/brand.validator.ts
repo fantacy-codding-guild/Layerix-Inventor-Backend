@@ -1,3 +1,4 @@
+//backend\src\validators\brand.validator.ts
 import { z } from 'zod';
 
 export const brandSchema = z.object({

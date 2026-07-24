@@ -1,3 +1,4 @@
+//backend\src\middleware\requireWriteAccess.ts
 export const requireWriteAccess = (req: any, res: any, next: any) => {
     // Admins and managers can write
     if (req.user?.role === 'admin' || req.user?.role === 'manager') {

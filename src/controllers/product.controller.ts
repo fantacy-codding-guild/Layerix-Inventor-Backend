@@ -1,3 +1,4 @@
+//backend\src\controllers\product.controller.ts
 import prisma from '../lib/prisma';
 import {
     createProductSchema,
