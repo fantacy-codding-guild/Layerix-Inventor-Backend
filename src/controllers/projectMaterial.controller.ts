@@ -1,3 +1,4 @@
+// backend\src\controllers\projectMaterial.controller.ts
 import prisma from '../lib/prisma';
 import { z } from 'zod';
 import { ReferenceType } from '@prisma/client';   // ✅ import for enum
@@ -173,6 +174,7 @@ export const consumeMaterial = async (req: any, res: any) => {
 };
 
 // ─── Transfer material back to office ─────────────────────
+
 export const transferOutMaterial = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -211,8 +213,8 @@ export const transferOutMaterial = async (req: any, res: any) => {
                     productId,
                     type: 'STOCK_OUT',
                     quantity,
-                    toProjectId: null,   // office
-                    referenceType: ReferenceType.PROJECT_RETURN,   // ✅ updated
+                    toProjectId: projectId,   // ✅ FIX: set to project ID
+                    referenceType: ReferenceType.PROJECT_RETURN,
                     date: new Date(),
                     notes: notes || 'Return to office',
                     createdBy: req.user.userId,

@@ -1,3 +1,4 @@
+// backend\src\controllers\inventory.controller.ts
 import prisma from '../lib/prisma';
 import {
     stockInSchema,
@@ -434,7 +435,6 @@ export const updateMovement = async (req: any, res: any) => {
         res.status(500).json({ message: error.message || 'Failed to update movement' });
     }
 };
-
 export const deleteMovement = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -442,7 +442,7 @@ export const deleteMovement = async (req: any, res: any) => {
 
         const movement = await prisma.stockMovement.findFirst({
             where: { id: movementId, tenantId },
-            include: { product: { include: { inventoryItems: true } } },
+            include: { product: true },
         });
         if (!movement) return res.status(404).json({ message: 'Movement not found' });
 
@@ -450,22 +450,81 @@ export const deleteMovement = async (req: any, res: any) => {
             return res.status(400).json({ message: 'Cannot delete adjustment movements' });
         }
 
-        const stockDelta = movement.type === 'STOCK_IN' ? -movement.quantity : movement.quantity;
+        const projectRefTypes = ['PROJECT_ORDER', 'PROJECT_CONSUME', 'PROJECT_RETURN'];
+        const isProjectMovement = projectRefTypes.includes(movement.referenceType);
 
         await prisma.$transaction(async (tx) => {
-            await tx.stockMovement.delete({ where: { id: movementId } });
+            if (isProjectMovement) {
+                if (!movement.toProjectId) {
+                    throw new Error('Project movement missing project ID');
+                }
 
-            const item = await tx.inventoryItem.findFirst({
-                where: { tenantId, productId: movement.productId },
-            });
-            if (item) {
-                const newOnHand = item.quantityOnHand + stockDelta;
-                if (newOnHand < 0) throw new Error('Deleting this movement would result in negative stock');
+                const projectStock = await tx.projectStock.findUnique({
+                    where: {
+                        projectId_productId: {
+                            projectId: movement.toProjectId,
+                            productId: movement.productId,
+                        },
+                    },
+                });
+
+                if (!projectStock) {
+                    throw new Error('Project stock record not found');
+                }
+
+                // Reverse the effect of the movement on project stock
+                let delta = 0;
+                if (movement.type === 'STOCK_IN') {
+                    delta = -movement.quantity;
+                } else if (movement.type === 'STOCK_OUT') {
+                    delta = movement.quantity;
+                }
+
+                let newQty = projectStock.quantityOnSite + delta;
+                // If new quantity would be negative, set to 0 and log warning
+                if (newQty < 0) {
+                    console.warn(
+                        `Deleting movement ${movementId} would result in negative project stock. Setting stock to 0.`
+                    );
+                    newQty = 0;
+                }
+
+                await tx.projectStock.update({
+                    where: {
+                        projectId_productId: {
+                            projectId: movement.toProjectId,
+                            productId: movement.productId,
+                        },
+                    },
+                    data: { quantityOnSite: newQty },
+                });
+            } else {
+                // Office stock adjustment
+                const item = await tx.inventoryItem.findFirst({
+                    where: { tenantId, productId: movement.productId },
+                });
+                if (!item) {
+                    throw new Error('Office inventory item not found');
+                }
+
+                const stockDelta = movement.type === 'STOCK_IN' ? -movement.quantity : movement.quantity;
+                let newOnHand = item.quantityOnHand + stockDelta;
+                if (newOnHand < 0) {
+                    // Set to 0 if negative (office stock)
+                    console.warn(
+                        `Deleting movement ${movementId} would result in negative office stock. Setting stock to 0.`
+                    );
+                    newOnHand = 0;
+                }
+
                 await tx.inventoryItem.update({
                     where: { id: item.id },
                     data: { quantityOnHand: newOnHand },
                 });
             }
+
+            // Finally delete the movement
+            await tx.stockMovement.delete({ where: { id: movementId } });
         });
 
         await prisma.activityLog.create({
@@ -475,7 +534,7 @@ export const deleteMovement = async (req: any, res: any) => {
                 action: 'DELETE',
                 entityType: 'StockMovement',
                 entityId: movementId,
-                details: { type: movement.type, quantity: movement.quantity },
+                details: { type: movement.type, quantity: movement.quantity, referenceType: movement.referenceType },
             },
         });
 
