@@ -1,5 +1,31 @@
-node_modules
-.env
+# Next.js
+.next/
+out/
 
-.env.*
-!.env.example
+# Vercel
+.vercel/
+
+# Build
+dist/
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
+# TypeScript
+*.tsbuildinfo
+
+# Cache
+.cache/
+
+# Coverage
+coverage/
