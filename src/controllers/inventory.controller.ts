@@ -459,18 +459,28 @@ export const deleteMovement = async (req: any, res: any) => {
                     throw new Error('Project movement missing project ID');
                 }
 
-                const projectStock = await tx.projectStock.findUnique({
+                // Find all ProjectStock records for this (projectId, productId)
+                const projectStocks = await tx.projectStock.findMany({
                     where: {
-                        projectId_productId: {
-                            projectId: movement.toProjectId,
-                            productId: movement.productId,
-                        },
+                        projectId: movement.toProjectId,
+                        productId: movement.productId,
                     },
                 });
 
-                if (!projectStock) {
+                if (projectStocks.length === 0) {
                     throw new Error('Project stock record not found');
                 }
+
+                if (projectStocks.length > 1) {
+                    // Multiple units exist – we cannot safely determine which one to adjust.
+                    // You could optionally extract unit from movement.notes or throw error.
+                    throw new Error(
+                        `Multiple units exist for this product on the project. Cannot delete movement.`
+                    );
+                }
+
+                const projectStock = projectStocks[0];
+                const unit = projectStock.unit;
 
                 // Reverse the effect of the movement on project stock
                 let delta = 0;
@@ -481,7 +491,6 @@ export const deleteMovement = async (req: any, res: any) => {
                 }
 
                 let newQty = projectStock.quantityOnSite + delta;
-                // If new quantity would be negative, set to 0 and log warning
                 if (newQty < 0) {
                     console.warn(
                         `Deleting movement ${movementId} would result in negative project stock. Setting stock to 0.`
@@ -491,9 +500,10 @@ export const deleteMovement = async (req: any, res: any) => {
 
                 await tx.projectStock.update({
                     where: {
-                        projectId_productId: {
+                        projectId_productId_unit: {
                             projectId: movement.toProjectId,
                             productId: movement.productId,
+                            unit,
                         },
                     },
                     data: { quantityOnSite: newQty },
@@ -510,7 +520,6 @@ export const deleteMovement = async (req: any, res: any) => {
                 const stockDelta = movement.type === 'STOCK_IN' ? -movement.quantity : movement.quantity;
                 let newOnHand = item.quantityOnHand + stockDelta;
                 if (newOnHand < 0) {
-                    // Set to 0 if negative (office stock)
                     console.warn(
                         `Deleting movement ${movementId} would result in negative office stock. Setting stock to 0.`
                     );
@@ -523,7 +532,6 @@ export const deleteMovement = async (req: any, res: any) => {
                 });
             }
 
-            // Finally delete the movement
             await tx.stockMovement.delete({ where: { id: movementId } });
         });
 
