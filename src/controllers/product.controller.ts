@@ -1,5 +1,6 @@
-//backend\src\controllers\product.controller.ts
+// backend/src/controllers/product.controller.ts
 import prisma from '../lib/prisma';
+import { Prisma } from '@prisma/client';   // ✅ import Prisma for error handling
 import {
     createProductSchema,
     updateProductSchema,
@@ -37,7 +38,6 @@ export const getProducts = async (req: any, res: any) => {
         const [products, total] = await Promise.all([
             prisma.product.findMany({
                 where,
-                // no stock include – stock is now separate inventoryItems
                 orderBy: { [sortBy as string]: sortOrder },
                 skip,
                 take: Number(limit),
@@ -45,7 +45,6 @@ export const getProducts = async (req: any, res: any) => {
             prisma.product.count({ where }),
         ]);
 
-        // Return product data only – stock/quantity is now in inventoryItems
         res.json({
             data: products,
             pagination: {
@@ -65,20 +64,15 @@ export const getProduct = async (req: any, res: any) => {
     try {
         const product = await prisma.product.findFirst({
             where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
-            // No includes – only the product's own fields (name, unit, description, etc.)
         });
 
         if (!product) return res.status(404).json({ message: 'Product not found' });
-
-        // Return exactly what the frontend expects for editing
         res.json(product);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Failed to fetch product' });
     }
 };
-
-// backend/src/controllers/product.controller.ts
 
 export const createProduct = async (req: any, res: any) => {
     try {
@@ -93,18 +87,30 @@ export const createProduct = async (req: any, res: any) => {
                 })),
             });
         }
-        const data = validation.data;
 
-        // 🔍 Check for duplicate product name (case‑insensitive) per tenant
+        // Extract and trim data
+        let { name, unit, description, modelNumber } = validation.data;
+        name = name?.trim();
+        unit = unit?.trim() || 'Pcs';
+        description = description?.trim() || null;
+        modelNumber = modelNumber?.trim() || null;
+
+        if (!name) {
+            return res.status(400).json({
+                message: 'Product name is required and cannot be empty.',
+            });
+        }
+
+        // Check for duplicate product name (case‑insensitive)
         const existingProduct = await prisma.product.findFirst({
             where: {
                 tenantId,
-                name: { equals: data.name, mode: 'insensitive' },
+                name: { equals: name, mode: 'insensitive' },
             },
         });
         if (existingProduct) {
             return res.status(409).json({
-                message: `A product with the name "${data.name}" already exists. Please use a different name.`,
+                message: `A product with the name "${name}" already exists. Please use a different name.`,
             });
         }
 
@@ -114,10 +120,10 @@ export const createProduct = async (req: any, res: any) => {
             data: {
                 tenantId,
                 productCode,
-                name: data.name,
-                unit: data.unit,
-                description: data.description || null,
-                modelNumber: data.modelNumber,
+                name,
+                unit,
+                description,
+                modelNumber,
             },
         });
 
@@ -135,6 +141,16 @@ export const createProduct = async (req: any, res: any) => {
         res.status(201).json(product);
     } catch (error) {
         console.error('Create product error:', error);
+
+        // Handle Prisma unique constraint error
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
+            if (error.code === 'P2002') {
+                return res.status(409).json({
+                    message: 'A product with this name or code already exists.',
+                });
+            }
+        }
+
         res.status(500).json({ message: 'Failed to create product' });
     }
 };
@@ -159,13 +175,12 @@ export const updateProduct = async (req: any, res: any) => {
         const existing = await prisma.product.findFirst({ where: { id: productId, tenantId } });
         if (!existing) return res.status(404).json({ message: 'Product not found' });
 
-        // Only fields that exist on Product
-        const updateData: any = {
-            name: data.name,
-            unit: data.unit,
-            description: data.description,
-            modelNumber: data.modelNumber,
-        };
+        // Trim and prepare update data
+        const updateData: any = {};
+        if (data.name !== undefined) updateData.name = data.name?.trim();
+        if (data.unit !== undefined) updateData.unit = data.unit?.trim() || 'Pcs';
+        if (data.description !== undefined) updateData.description = data.description?.trim() || null;
+        if (data.modelNumber !== undefined) updateData.modelNumber = data.modelNumber?.trim() || null;
 
         const updated = await prisma.product.update({
             where: { id: productId },
@@ -197,7 +212,6 @@ export const deleteProduct = async (req: any, res: any) => {
         const existing = await prisma.product.findFirst({ where: { id: productId, tenantId } });
         if (!existing) return res.status(404).json({ message: 'Product not found' });
 
-        // Check if product has any inventory items or stock movements
         const itemCount = await prisma.inventoryItem.count({ where: { productId } });
         const movementCount = await prisma.stockMovement.count({ where: { productId } });
         if (itemCount > 0 || movementCount > 0) {
