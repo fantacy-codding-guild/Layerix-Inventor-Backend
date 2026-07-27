@@ -78,6 +78,8 @@ export const getProduct = async (req: any, res: any) => {
     }
 };
 
+// backend/src/controllers/product.controller.ts
+
 export const createProduct = async (req: any, res: any) => {
     try {
         const tenantId = req.user.tenantId;
@@ -92,9 +94,22 @@ export const createProduct = async (req: any, res: any) => {
             });
         }
         const data = validation.data;
+
+        // 🔍 Check for duplicate product name (case‑insensitive) per tenant
+        const existingProduct = await prisma.product.findFirst({
+            where: {
+                tenantId,
+                name: { equals: data.name, mode: 'insensitive' },
+            },
+        });
+        if (existingProduct) {
+            return res.status(409).json({
+                message: `A product with the name "${data.name}" already exists. Please use a different name.`,
+            });
+        }
+
         const productCode = await generateProductCode(tenantId);
 
-        // No stock creation – stock is now separate inventoryItems
         const product = await prisma.product.create({
             data: {
                 tenantId,
@@ -103,7 +118,6 @@ export const createProduct = async (req: any, res: any) => {
                 unit: data.unit,
                 description: data.description || null,
                 modelNumber: data.modelNumber,
-                // No brands array – brands are part of inventoryItems
             },
         });
 
@@ -120,7 +134,7 @@ export const createProduct = async (req: any, res: any) => {
 
         res.status(201).json(product);
     } catch (error) {
-        console.error(error);
+        console.error('Create product error:', error);
         res.status(500).json({ message: 'Failed to create product' });
     }
 };
