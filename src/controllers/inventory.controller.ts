@@ -116,7 +116,8 @@ export const stockIn = async (req: any, res: any) => {
             return res.status(400).json({ message: 'Validation error', errors: validation.error.issues });
         }
 
-        const { productId, quantity, unitPrice, fromVendorId, projectId, referenceType, referenceId, notes } =
+        // ✅ Include unit in destructuring
+        const { productId, quantity, unitPrice, fromVendorId, projectId, referenceType, referenceId, notes, unit } =
             validation.data;
 
         const product = await prisma.product.findFirst({
@@ -134,14 +135,15 @@ export const stockIn = async (req: any, res: any) => {
         }
 
         const brandName = extractBrandFromNotes(notes) || 'Unknown';
-        const unit = product.unit;
+        // ✅ Use provided unit instead of product.unit
+        const itemUnit = unit; // validation ensures it exists
 
         await prisma.$transaction(async (tx) => {
             const existingItem = await tx.inventoryItem.findFirst({
                 where: {
                     tenantId,
                     productId,
-                    unit,
+                    unit: itemUnit,
                     vendorId: fromVendorId || null,
                 },
             });
@@ -161,7 +163,7 @@ export const stockIn = async (req: any, res: any) => {
                         tenantId,
                         productId,
                         brand: brandName,
-                        unit,
+                        unit: itemUnit,
                         vendorId: fromVendorId || null,
                         quantityOnHand: quantity,
                         averageCost: unitPrice || null,
@@ -169,7 +171,6 @@ export const stockIn = async (req: any, res: any) => {
                 });
             }
 
-            // Determine reference type: if fromVendorId is present, it's a purchase order
             const refType = fromVendorId
                 ? (referenceType ?? ReferenceType.PURCHASE_ORDER)
                 : (referenceType ?? ReferenceType.MANUAL_ADJUSTMENT);
@@ -199,7 +200,7 @@ export const stockIn = async (req: any, res: any) => {
                 action: 'STOCK_IN',
                 entityType: 'Product',
                 entityId: productId,
-                details: { quantity, unitPrice, fromVendorId, projectId },
+                details: { quantity, unitPrice, fromVendorId, projectId, unit: itemUnit },
             },
         });
 

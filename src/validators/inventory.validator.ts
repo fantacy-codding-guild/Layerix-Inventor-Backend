@@ -1,5 +1,4 @@
 // backend/src/validators/inventory.validator.ts
-// backend/src/validators/inventory.validator.ts
 import { z } from 'zod';
 import { ReferenceType } from '@prisma/client';
 
@@ -12,6 +11,7 @@ export const stockInSchema = z.object({
     referenceType: z.nativeEnum(ReferenceType).optional(),
     referenceId: z.number().int().optional(),
     notes: z.string().optional(),
+    unit: z.string().min(1, 'Unit is required'), // ✅ added
 });
 
 export const stockOutSchema = z.object({
@@ -24,7 +24,6 @@ export const stockOutSchema = z.object({
     referenceId: z.number().int().optional(),
     notes: z.string().optional(),
 
-    // Required to identify the inventory line
     brand: z.string().min(1, 'Brand is required'),
     unit: z.string().min(1, 'Unit is required'),
     vendorId: z.number().int().positive().optional().nullable(),
