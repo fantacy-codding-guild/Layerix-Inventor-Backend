@@ -44,7 +44,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/states', stateRoutes);
 
 
-app.use('/projects', projectMaterialRoutes);
+app.use('/api/projects', projectMaterialRoutes);
 
 
 export default app;

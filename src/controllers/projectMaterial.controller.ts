@@ -1,7 +1,7 @@
 // backend/src/controllers/projectMaterial.controller.ts
 import prisma from '../lib/prisma';
 import { z } from 'zod';
-import { ReferenceType } from '@prisma/client';
+import { Prisma, ReferenceType } from '@prisma/client';
 
 // ─── Helpers ─────────────────────────────────────────────
 const extractBrandFromNotes = (notes?: string): string | null => {
@@ -44,6 +44,17 @@ const transferOutSchema = z.object({
     unit: z.string().min(1, 'Unit is required'),
     notes: z.string().optional(),
 });
+
+// ─── Types ──────────────────────────────────────────────
+interface ProductStat {
+    product: { id: number; name: string; unit: string };
+    ordered: number;
+    consumed: number;
+    returned: number;
+    remaining: number;
+    orderedValue: number;
+    brand: string | null;
+}
 
 // ─── Order material ──────────────────────────────────────
 export const orderMaterial = async (req: any, res: any) => {
@@ -344,7 +355,10 @@ export const transferOutMaterial = async (req: any, res: any) => {
     }
 };
 
-// ─── Get project movements ───────────────────────────────
+
+
+// ... other imports and helpers
+
 export const getProjectMovements = async (req: any, res: any) => {
     const startTime = Date.now();
     try {
@@ -355,22 +369,48 @@ export const getProjectMovements = async (req: any, res: any) => {
             return res.status(400).json({ message: 'Invalid tenant or project ID' });
         }
 
-        const movements = await prisma.stockMovement.findMany({
-            where: { tenantId, toProjectId: projectId },
-            include: {
-                product: { select: { id: true, name: true, unit: true } },
-                fromVendor: { select: { id: true, name: true } },
-                user: { select: { id: true, name: true } },
-            },
-            orderBy: { date: 'desc' },
-            take: 50,
-        });
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const skip = (page - 1) * limit;
+
+        const where: Prisma.StockMovementWhereInput = {
+            tenantId,
+            toProjectId: projectId,
+        };
+
+        // Filter by type using ReferenceType enum
+        if (req.query.type) {
+            const typeMap: Record<string, ReferenceType[]> = {
+                ORDER: [ReferenceType.PROJECT_ORDER],
+                CONSUME: [ReferenceType.PROJECT_CONSUME],
+                TRANSFER_OUT: [ReferenceType.PROJECT_RETURN],
+            };
+            const refTypes = typeMap[req.query.type as string];
+            if (refTypes) {
+                where.referenceType = { in: refTypes };
+            }
+        }
+
+        const [movements, total] = await Promise.all([
+            prisma.stockMovement.findMany({
+                where,
+                include: {
+                    product: { select: { id: true, name: true, unit: true } },
+                    fromVendor: { select: { id: true, name: true } },
+                    user: { select: { id: true, name: true } },
+                },
+                orderBy: { date: 'desc' },
+                skip,
+                take: limit,
+            }),
+            prisma.stockMovement.count({ where }),
+        ]);
 
         const result = movements.map((m) => {
             let displayType: string;
-            if (m.referenceType === 'PROJECT_ORDER') displayType = 'ORDER';
-            else if (m.referenceType === 'PROJECT_CONSUME') displayType = 'CONSUME';
-            else if (m.referenceType === 'PROJECT_RETURN') displayType = 'TRANSFER_OUT';
+            if (m.referenceType === ReferenceType.PROJECT_ORDER) displayType = 'ORDER';
+            else if (m.referenceType === ReferenceType.PROJECT_CONSUME) displayType = 'CONSUME';
+            else if (m.referenceType === ReferenceType.PROJECT_RETURN) displayType = 'TRANSFER_OUT';
             else displayType = m.type;
 
             const brand = extractBrandFromNotes(m.notes);
@@ -392,7 +432,15 @@ export const getProjectMovements = async (req: any, res: any) => {
         const elapsed = Date.now() - startTime;
         console.log(`✅ Movements fetched in ${elapsed}ms for project ${projectId}`);
 
-        res.json(result);
+        res.json({
+            data: result,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
     } catch (error: any) {
         console.error('❌ Fetch movements error:', error);
         res.status(500).json({
@@ -483,5 +531,125 @@ export const getProjectStock = async (req: any, res: any) => {
             message: 'Failed to fetch project stock',
             error: process.env.NODE_ENV === 'development' ? error.message : undefined,
         });
+    }
+};
+
+
+
+
+
+export const getProjectStats = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const projectId = Number(req.params.id);
+
+        // Verify project exists and belongs to tenant
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, tenantId },
+        });
+        if (!project) {
+            return res.status(404).json({ message: 'Project not found' });
+        }
+
+        // Fetch all movements for this project
+        const movements = await prisma.stockMovement.findMany({
+            where: {
+                tenantId,
+                toProjectId: projectId,
+            },
+            include: {
+                product: true,
+            },
+        });
+
+        // Fetch project stock (current on-site quantities)
+        const projectStock = await prisma.projectStock.findMany({
+            where: { projectId },
+            include: {
+                product: true,
+            },
+        });
+
+        // Build product map using project stock as baseline
+        const productMap: Record<number, ProductStat> = {};
+        projectStock.forEach((ps) => {
+            productMap[ps.productId] = {
+                product: {
+                    id: ps.productId,
+                    name: ps.product.name,
+                    unit: ps.unit,
+                },
+                ordered: 0,
+                consumed: 0,
+                returned: 0,
+                remaining: ps.quantityOnSite,
+                orderedValue: 0,
+                brand: null, // Adjust if you have a brand field elsewhere
+            };
+        });
+
+        // Process movements
+        movements.forEach((m) => {
+            const pid = m.productId;
+            // Ensure entry exists (fallback if product not in projectStock)
+            if (!productMap[pid]) {
+                productMap[pid] = {
+                    product: {
+                        id: pid,
+                        name: m.product.name,
+                        unit: m.product.unit,
+                    },
+                    ordered: 0,
+                    consumed: 0,
+                    returned: 0,
+                    remaining: 0,
+                    orderedValue: 0,
+                    brand: null,
+                };
+            }
+
+            const entry = productMap[pid];
+
+            if (m.type === 'STOCK_IN') {
+                // Order (incoming to project)
+                entry.ordered += m.quantity;
+                entry.orderedValue += m.quantity * (Number(m.unitPrice) || 0);
+            } else if (m.type === 'STOCK_OUT') {
+                // Distinguish between CONSUME and RETURN based on referenceType
+                if (m.referenceType === 'PROJECT_CONSUME') {
+                    entry.consumed += m.quantity;
+                } else if (m.referenceType === 'PROJECT_RETURN') {
+                    entry.returned += m.quantity;
+                } else {
+                    // Other reference types (e.g., OFFICE_ISSUE) – treat as consumed (or ignore)
+                    // You can decide based on your business logic
+                    entry.consumed += m.quantity;
+                }
+            }
+        });
+
+        // Compute totals
+        const products = Object.values(productMap);
+        const totals = {
+            totalOrdered: products.reduce((sum, p) => sum + p.ordered, 0),
+            totalConsumed: products.reduce((sum, p) => sum + p.consumed, 0),
+            totalReturned: products.reduce((sum, p) => sum + p.returned, 0),
+            totalRemaining: products.reduce((sum, p) => sum + p.remaining, 0),
+            totalProducts: products.length,
+            totalOrderedValue: products.reduce((sum, p) => sum + p.orderedValue, 0),
+            consumptionRate: 0,
+            lastActivity: movements.length
+                ? movements[0].date.toISOString()
+                : null,
+        };
+        totals.consumptionRate =
+            totals.totalOrdered > 0
+                ? Math.round((totals.totalConsumed / totals.totalOrdered) * 100)
+                : 0;
+
+        res.json({ products, totals });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to fetch project stats' });
     }
 };
