@@ -1,13 +1,15 @@
 //backend\src\routes\dashboard.routes.ts
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
-import { inventorySummary } from '../controllers/dashboard.controller';
+import { inventorySummary, inventoryTrend } from '../controllers/dashboard.controller';
 
 const router = Router();
 
 // All dashboard routes require authentication
 router.use(authenticate);
 
+
 router.get('/inventory-summary', inventorySummary);
+router.get('/inventory-trend', inventoryTrend);  // ✅ new route
 
 export default router;

@@ -112,3 +112,107 @@ export const inventorySummary = async (req: any, res: any) => {
         res.status(500).json({ message: 'Failed to fetch dashboard summary' });
     }
 };
+
+export const inventoryTrend = async (req: any, res: any) => {
+    try {
+        const tenantId = req.user.tenantId;
+        const range = parseInt(req.query.range) || 12;
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setMonth(startDate.getMonth() - range);
+
+        // ─── Get current totals ──────────────────────────────
+        const officeItems = await prisma.inventoryItem.findMany({
+            where: { tenantId },
+            include: { product: { select: { id: true, name: true } } },
+        });
+        const projectStocks = await prisma.projectStock.findMany({
+            where: { project: { tenantId } },
+            include: { product: { select: { id: true, name: true } } },
+        });
+        const allProductIds = [
+            ...new Set([
+                ...officeItems.map(i => i.productId),
+                ...projectStocks.map(ps => ps.productId)
+            ])
+        ];
+        const avgCosts = await prisma.inventoryItem.findMany({
+            where: { tenantId, productId: { in: allProductIds } },
+            orderBy: { updatedAt: 'desc' },
+            distinct: ['productId'],
+            select: { productId: true, averageCost: true },
+        });
+        const avgCostMap = Object.fromEntries(
+            avgCosts.map(a => [a.productId, a.averageCost ? Number(a.averageCost) : 0])
+        );
+
+        let currentValue = 0, currentQty = 0;
+        officeItems.forEach(item => {
+            const avg = avgCostMap[item.productId] || 0;
+            currentValue += item.quantityOnHand * avg;
+            currentQty += item.quantityOnHand;
+        });
+        projectStocks.forEach(ps => {
+            const avg = avgCostMap[ps.productId] || 0;
+            currentValue += ps.quantityOnSite * avg;
+            currentQty += ps.quantityOnSite;
+        });
+
+        // ─── Fetch movements in date range ────────────────────
+        const movements = await prisma.stockMovement.findMany({
+            where: {
+                tenantId,
+                date: { gte: startDate, lte: endDate },
+                type: { in: ['STOCK_IN', 'STOCK_OUT'] },
+            },
+            select: { date: true, type: true, quantity: true, unitPrice: true },
+        });
+
+        // Group net changes by month
+        const monthlyNet: Record<string, { netValue: number; netQty: number }> = {};
+        movements.forEach(m => {
+            const monthKey = m.date.toISOString().slice(0, 7);
+            if (!monthlyNet[monthKey]) monthlyNet[monthKey] = { netValue: 0, netQty: 0 };
+            // ✅ Fix: Convert Decimal to number
+            const unitPrice = m.unitPrice ? Number(m.unitPrice) : 0;
+            const val = m.quantity * unitPrice;
+            if (m.type === 'STOCK_IN') {
+                monthlyNet[monthKey].netValue += val;
+                monthlyNet[monthKey].netQty += m.quantity;
+            } else {
+                monthlyNet[monthKey].netValue -= val;
+                monthlyNet[monthKey].netQty -= m.quantity;
+            }
+        });
+
+        const sortedMonths = Object.keys(monthlyNet).sort();
+        if (sortedMonths.length === 0) {
+            return res.json([{
+                month: new Date().toISOString().slice(0, 7),
+                totalValue: currentValue,
+                totalQuantity: currentQty,
+            }]);
+        }
+
+        const totalNetValue = Object.values(monthlyNet).reduce((acc, n) => acc + n.netValue, 0);
+        const totalNetQty = Object.values(monthlyNet).reduce((acc, n) => acc + n.netQty, 0);
+        let accValue = currentValue - totalNetValue;
+        let accQty = currentQty - totalNetQty;
+
+        const trendData = sortedMonths.map(monthKey => {
+            const net = monthlyNet[monthKey];
+            accValue += net.netValue;
+            accQty += net.netQty;
+            return {
+                month: monthKey,
+                totalValue: Math.round(accValue),
+                totalQuantity: Math.round(accQty),
+            };
+        });
+
+        res.json(trendData);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Failed to fetch inventory trend' });
+    }
+};
